@@ -8,24 +8,27 @@ import TrashView from './pages/TrashView';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import { AuthProvider } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import './styles/global.css';
 
 function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route element={<Layout />}>
-            <Route path="/" element={<Navigate to="/new" replace />} />
-            <Route path="/new" element={<PageEditor />} />
-            <Route path="/page/:id" element={<PageEditor />} />
-            <Route path="/graph" element={<GraphView />} />
-            <Route path="/trash" element={<TrashView />} />
-          </Route>
-        </Routes>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route element={<Layout />}>
+              <Route path="/" element={<Navigate to="/new" replace />} />
+              <Route path="/new" element={<PageEditor />} />
+              <Route path="/page/:id" element={<PageEditor />} />
+              <Route path="/graph" element={<GraphView />} />
+              <Route path="/trash" element={<TrashView />} />
+            </Route>
+          </Routes>
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }

@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
@@ -46,6 +46,11 @@ export default function PageEditor() {
   const skipTitleDebounceRef = useRef(true);
 
   const [collab, setCollab] = useState<EditorCollab | null>(null);
+
+  const collabUserInfo = useMemo(
+    () => (user ? { name: user.name, color: user.avatarColor } : undefined),
+    [user?.name, user?.avatarColor],
+  );
 
   useEffect(() => {
     if (!pageId || !user) {
@@ -508,9 +513,7 @@ export default function PageEditor() {
               onEditorReady={setEditorInstance}
               onRequestLinkEdit={openLinkPopover}
               collab={pageId ? collab : null}
-              collabUser={
-                user ? { name: user.name, color: user.avatarColor } : undefined
-              }
+              collabUser={collabUserInfo}
             />
 
             {pageId && <Backlinks pageId={pageId} />}

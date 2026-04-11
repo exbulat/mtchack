@@ -122,6 +122,8 @@ export default function Editor({
   const [tableMenuBtn, setTableMenuBtn] = useState<{ x: number; y: number } | null>(null);
 
   const useCollab = Boolean(collab?.ydoc && collab?.provider && collabUser);
+  const collabUserName = collabUser?.name;
+  const collabUserColor = collabUser?.color;
 
   const extensions = useMemo(() => {
     const starter = useCollab
@@ -147,7 +149,7 @@ export default function Editor({
             Collaboration.configure({ document: collab.ydoc }),
             CollaborationCursor.configure({
               provider: collab.provider,
-              user: { name: collabUser.name, color: collabUser.color },
+              user: { name: collabUserName!, color: collabUserColor! },
             }),
           ]
         : [];
@@ -165,7 +167,7 @@ export default function Editor({
       MwsTableExtension,
       ...collabExts,
     ];
-  }, [useCollab, collab, collabUser]);
+  }, [useCollab, collab, collabUserName, collabUserColor]);
 
   const editor = useEditor({
     extensions,
@@ -372,17 +374,6 @@ export default function Editor({
     }
     setTableCtx(null);
   };
-
-  useEffect(() => {
-    if (useCollab) return;
-    if (!editor || !content) return;
-    if (editor.isFocused) return;
-    const currentJSON = JSON.stringify(editor.getJSON());
-    const newJSON = JSON.stringify(content);
-    if (currentJSON !== newJSON) {
-      editor.commands.setContent(content, false);
-    }
-  }, [content, editor, useCollab]);
 
   useEffect(() => {
     if (!useCollab || !collab || !editor) return;

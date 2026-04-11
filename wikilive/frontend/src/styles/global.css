@@ -24,6 +24,18 @@
   --radius: 6px;
 }
 
+[data-theme='dark'] {
+  --bg: #1a1a1a;
+  --bg-secondary: #242428;
+  --bg-hover: #2f2f36;
+  --border: #3a3a42;
+  --text: #e8e8e8;
+  --text-secondary: #a0a0a8;
+  --text-muted: #6b6b75;
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+}
+
 html, body {
   height: 100%;
   font-family: var(--font);
@@ -52,6 +64,18 @@ button {
   border: none;
   background: none;
   font-size: 14px;
+}
+
+.theme-toggle {
+  font-size: 20px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  transition: background 0.15s;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-hover);
 }
 
 /* Layout */
@@ -689,35 +713,35 @@ button {
 
 /* editor redesign */
 .app-layout {
-  background: #fcfcfd;
+  background: var(--bg);
 }
 
 .sidebar {
   width: 258px;
-  background: #1f2126;
-  border-right: 1px solid #2f323a;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
 }
 
 .sidebar-header {
-  border-bottom: 1px solid #2f323a;
-  color: #f3f4f8;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
 }
 
 .sidebar-item {
-  color: #cbced8;
+  color: var(--text);
 }
 
 .sidebar-item:hover {
-  background: #2a2d35;
+  background: var(--bg-hover);
 }
 
 .sidebar-item.active {
-  background: #3a3f4c;
+  background: var(--accent);
   color: #fff;
 }
 
 .sidebar-footer {
-  border-top: 1px solid #2f323a;
+  border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -726,7 +750,7 @@ button {
 .sidebar-user-block {
   margin-top: 8px;
   padding: 10px 12px;
-  border-top: 1px solid #2f323a;
+  border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -756,7 +780,7 @@ button {
 .sidebar-user-name {
   font-size: 13px;
   font-weight: 500;
-  color: #d6d9e4;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -764,18 +788,18 @@ button {
 
 .sidebar-user-logout {
   font-size: 12px !important;
-  color: #8b8d9a !important;
+  color: var(--text-secondary) !important;
   padding: 4px 8px !important;
   flex-shrink: 0;
 }
 
 .sidebar-user-logout:hover {
-  color: #f3f4f8 !important;
-  background: rgba(255, 255, 255, 0.08) !important;
+  color: var(--text) !important;
+  background: var(--bg-hover) !important;
 }
 
 .sidebar .btn-ghost {
-  color: #d6d9e4;
+  color: var(--text);
 }
 
 .editor-shell {
@@ -789,7 +813,7 @@ button {
   outline: none;
   background: transparent;
   font-size: 13px;
-  color: #9a9aa4;
+  color: var(--text-muted);
 }
 
 .page-description-under-title {
@@ -800,12 +824,12 @@ button {
 
 .editor-toolbar-line {
   height: 42px;
-  border-bottom: 1px solid #ececf1;
+  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  background: #f7f7fa;
+  background: var(--bg-secondary);
 }
 
 .toolbar-group {
@@ -820,13 +844,13 @@ button {
   border-radius: 8px;
   padding: 0 7px;
   font-size: 12px;
-  color: #686874;
-  border: 1px solid #e9e9ef;
-  background: #fff;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .toolbar-btn:hover {
-  background: #f2f2f7;
+  background: var(--bg-hover);
 }
 
 .toolbar-btn:active {
@@ -842,11 +866,11 @@ button {
 
 .toolbar-link {
   font-size: 13px;
-  color: #666677;
+  color: var(--text-secondary);
 }
 
 .toolbar-link.active {
-  color: #2f2f39;
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -885,7 +909,7 @@ button {
   font-size: 16px;
   line-height: 1.45;
   letter-spacing: -0.01em;
-  color: #1f1f26;
+  color: var(--text);
 }
 
 .tiptap p {
@@ -906,7 +930,7 @@ button {
 }
 
 .slash-menu {
-  border: 1px solid #ebebf2;
+  border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: 0 16px 42px rgba(9, 11, 26, 0.14);
   padding: 8px;
@@ -924,9 +948,9 @@ button {
   display: inline-flex;
   gap: 6px;
   padding: 5px;
-  border: 1px solid #ececf2;
+  border: 1px solid var(--border);
   border-radius: 11px;
-  background: #fff;
+  background: var(--bg);
   box-shadow: 0 10px 24px rgba(15, 17, 28, 0.16);
 }
 
@@ -934,22 +958,22 @@ button {
   height: 28px;
   min-width: 28px;
   border-radius: 8px;
-  border: 1px solid #ededf3;
-  background: #f9f9fc;
-  color: #525263;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
   font-weight: 600;
   font-size: 12px;
   padding: 0 8px;
 }
 
 .bubble-btn:hover {
-  background: #f1f1f7;
+  background: var(--bg-hover);
 }
 
 .right-panel {
   width: 330px;
-  border-left: 1px solid #ebebef;
-  background: #f7f7fa;
+  border-left: 1px solid var(--border);
+  background: var(--bg-secondary);
   display: flex;
   flex-direction: column;
 }
@@ -959,14 +983,14 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #ececf1;
+  border-bottom: 1px solid var(--border);
   padding: 0 12px;
 }
 
 .right-panel-header h3 {
   font-size: 22px;
   font-weight: 600;
-  color: #2a2b34;
+  color: var(--text);
 }
 
 .timeline-list,
@@ -976,8 +1000,8 @@ button {
 }
 
 .comment-composer {
-  background: #fff;
-  border: 1px solid #ececf2;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
   margin-bottom: 10px;
@@ -985,7 +1009,7 @@ button {
 
 .comment-input {
   width: 100%;
-  border: 1px solid #e5e5ef;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 10px;
   min-height: 76px;
@@ -996,8 +1020,8 @@ button {
 
 .timeline-item,
 .comment-card {
-  background: #fff;
-  border: 1px solid #ececf2;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
   margin-bottom: 10px;
@@ -1007,19 +1031,19 @@ button {
 .comment-author {
   font-size: 14px;
   font-weight: 600;
-  color: #2f2f38;
+  color: var(--text);
 }
 
 .timeline-time,
 .comment-time {
   font-size: 12px;
-  color: #9a9aa7;
+  color: var(--text-muted);
   margin-top: 2px;
 }
 
 .comment-text {
   font-size: 14px;
-  color: #3f3f48;
+  color: var(--text);
   margin-top: 8px;
   line-height: 1.35;
 }

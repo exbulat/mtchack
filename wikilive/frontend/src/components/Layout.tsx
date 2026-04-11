@@ -1,9 +1,11 @@
 import { Link, Outlet } from 'react-router-dom';
 import Sidebar, { PagesListProvider } from './Sidebar';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 
 export default function Layout() {
   const { user, loading, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <PagesListProvider>
@@ -11,6 +13,14 @@ export default function Layout() {
         <Sidebar />
         <div className="main-column">
           <header className="app-topbar">
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={() => void toggleTheme()}
+              title={theme === 'light' ? 'Тёмная тема' : 'Светлая тема'}
+            >
+              {theme === 'light' ? '🌙' : '☀️'}
+            </button>
             {!loading && user ? (
               <>
                 <span className="topbar-user">
