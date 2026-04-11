@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Page {
+  id        String    @id @default(uuid())
+  title     String    @default("Без названия")
+  content   Json      @default("{}")
+  icon      String    @default("")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? @map("deleted_at")
+
+  outgoingLinks PageLink[]     @relation("source")
+  incomingLinks PageLink[]     @relation("target")
+  revisions     PageRevision[]
+  comments      Comment[]
+}
+
+model PageLink {
+  id       String @id @default(uuid())
+  sourceId String
+  targetId String
+
+  source Page @relation("source", fields: [sourceId], references: [id], onDelete: Cascade)
+  target Page @relation("target", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, targetId])
+}
+
+model PageRevision {
+  id        String   @id @default(uuid())
+  pageId    String
+  content   Json
+  createdAt DateTime @default(now())
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  pageId    String
+  blockId   String   @default("")
+  text      String
+  authorId  String   @default("anonymous")
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+}
