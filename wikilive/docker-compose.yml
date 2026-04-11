@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     container_name: postgres
@@ -29,10 +27,10 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wikilive}:${POSTGRES_PASSWORD:-wikilive_secure_min_12_chars}@postgres:5432/wikilive
       MWS_TABLES_BASE_URL: ${MWS_TABLES_BASE_URL:-https://tables.mws.ru}
-      MWS_TABLES_TOKEN: ${MWS_TABLES_TOKEN}
-      MWS_TABLES_SPACE_ID: ${MWS_TABLES_SPACE_ID}
+      MWS_TABLES_TOKEN: ${MWS_TABLES_TOKEN:-}
+      MWS_TABLES_SPACE_ID: ${MWS_TABLES_SPACE_ID:-}
       MWS_GPT_API_URL: ${MWS_GPT_API_URL:-https://api.gpt.mws.ru/v1/chat/completions}
-      MWS_GPT_API_KEY: ${MWS_GPT_API_KEY}
+      MWS_GPT_API_KEY: ${MWS_GPT_API_KEY:-}
       PORT: 3001
       WS_PORT: 3002
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
