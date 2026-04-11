@@ -36,6 +36,7 @@ services:
       PORT: 3001
       WS_PORT: 3002
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
+      COOKIE_SECRET: ${COOKIE_SECRET:-wikilive-dev-cookie-secret-change-me}
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,9 +49,6 @@ services:
       - '3000:8080'
     depends_on:
       - backend
-
-  # SECURITY: For production, use separate docker-compose.prod.yml
-  # This file is for development only. Never expose 5432 in production.
 
 volumes:
   pgdata:

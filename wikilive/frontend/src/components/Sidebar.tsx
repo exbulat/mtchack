@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { api, PageSummary } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 
 // счётчик увеличиваем вручную, чтобы сайдбар перезапросил список без лишних подписок
 export const PagesListContext = createContext<{
@@ -22,6 +23,7 @@ export default function Sidebar() {
   const [pages, setPages] = useState<PageSummary[]>([]);
   const navigate = useNavigate();
   const { pagesListVersion } = useContext(PagesListContext);
+  const { user, logout } = useAuth();
 
   const loadPages = async () => {
     try {
@@ -96,6 +98,26 @@ export default function Sidebar() {
         <NavLink to="/graph" className="btn btn-ghost btn-full">
           Граф связей
         </NavLink>
+        {user && (
+          <div className="sidebar-user-block">
+            <div className="sidebar-user-info">
+              <span
+                className="sidebar-user-avatar"
+                style={{ backgroundColor: user.avatarColor }}
+              >
+                {user.name[0]?.toUpperCase()}
+              </span>
+              <span className="sidebar-user-name">{user.name}</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost sidebar-user-logout"
+              onClick={() => void logout()}
+            >
+              Выйти
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

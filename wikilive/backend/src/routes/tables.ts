@@ -40,12 +40,29 @@ function validateNumericParam(param: unknown, max: number = 1000): number | null
 
 router.get('/', async (_req: Request, res: Response) => {
   try {
-    const spaceId = process.env.MWS_TABLES_SPACE_ID;
+    let spaceId = process.env.MWS_TABLES_SPACE_ID;
+
+    // Auto-discover: if no space is configured, use the first available space
     if (!spaceId) {
-      return res.status(500).json({ error: 'MWS_TABLES_SPACE_ID not configured' });
+      const spacesResp = await fetch(`${BASE_URL()}/fusion/v1/spaces`, {
+        headers: getMwsHeaders(),
+      });
+      const spacesJson: any = await spacesResp.json().catch(() => ({}));
+      if (!spacesResp.ok) {
+        return res.status(spacesResp.status).json(spacesJson || { error: 'Failed to fetch spaces' });
+      }
+      const spaces: any[] = spacesJson?.data?.spaces || spacesJson?.spaces || [];
+      const firstId = spaces[0]?.id || spaces[0]?.spaceId;
+      if (!firstId || !validateSpaceId(firstId)) {
+        return res.status(404).json({ error: 'No MWS spaces available' });
+      }
+      spaceId = firstId;
+    } else if (!validateSpaceId(spaceId)) {
+      return res.status(500).json({ error: 'MWS_TABLES_SPACE_ID has invalid format' });
     }
+
     const resp = await fetch(
-      `${BASE_URL()}/fusion/v1/spaces/${spaceId}/nodes?type=Datasheet`,
+      `${BASE_URL()}/fusion/v1/spaces/${encodeURIComponent(spaceId as string)}/nodes?type=Datasheet`,
       { headers: getMwsHeaders() }
     );
     const data = await resp.json();

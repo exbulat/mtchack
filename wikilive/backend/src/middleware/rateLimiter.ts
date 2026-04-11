@@ -8,7 +8,8 @@ export const globalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req: Request) => {
-    return req.path === '/api/health';
+    const base = (req.originalUrl || '').split('?')[0] || '';
+    return base === '/api/health' || base.startsWith('/api/auth');
   },
 });
 

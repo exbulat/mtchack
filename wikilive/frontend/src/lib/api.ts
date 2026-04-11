@@ -1,8 +1,11 @@
 const API_BASE = '/api';
 
+const fetchDefaults: RequestInit = { credentials: 'include' };
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
+    ...fetchDefaults,
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
   });
   if (!res.ok) {
@@ -47,12 +50,38 @@ export interface PageComment {
   createdAt: string;
 }
 
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  avatarColor: string;
+}
+
 /** MWS tables API: то обёртка `{ data: ... }`, то плоский JSON */
 type MwsFieldsResponse = { data?: { fields?: unknown[] }; fields?: unknown[] };
 type MwsRecordsResponse = { data?: { records?: unknown[] }; records?: unknown[] };
 type MwsNodesResponse = { data?: { nodes?: unknown[] }; nodes?: unknown[] };
 
 export const api = {
+  authMe: () => request<{ user: AuthUser | null }>('/auth/me'),
+
+  register: (body: { email: string; password: string; name: string }) =>
+    request<{ user: AuthUser }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  login: (body: { email: string; password: string }) =>
+    request<{ user: AuthUser }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  logout: () =>
+    request<{ ok: boolean }>('/auth/logout', {
+      method: 'POST',
+    }),
+
   listPages: () => request<PageSummary[]>('/pages'),
 
   getPage: (id: string) => request<Page>(`/pages/${id}`),
@@ -103,7 +132,7 @@ export const api = {
     }),
 
   listComments: (id: string) => request<PageComment[]>(`/pages/${id}/comments`),
-  createComment: (id: string, data: { text: string; authorId?: string; blockId?: string }) =>
+  createComment: (id: string, data: { text: string; blockId?: string }) =>
     request<PageComment>(`/pages/${id}/comments`, {
       method: 'POST',
       body: JSON.stringify(data),

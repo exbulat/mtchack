@@ -7,8 +7,12 @@ import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import Link from '@tiptap/extension-link';
+import Collaboration from '@tiptap/extension-collaboration';
+import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 import { Node, mergeAttributes, type Editor as TiptapEditor } from '@tiptap/core';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import type { HocuspocusProvider } from '@hocuspocus/provider';
+import * as Y from 'yjs';
 import SlashMenu, { SLASH_ITEMS, SlashItem } from './SlashMenu';
 import TableEmbed from './TableEmbed';
 
@@ -76,6 +80,11 @@ function consumeSlashBeforeCursor(editor: TiptapEditor) {
 
 const TABLE_GRID_MAX = 6;
 
+export interface EditorCollab {
+  ydoc: Y.Doc;
+  provider: HocuspocusProvider;
+}
+
 interface EditorProps {
   content: any;
   onUpdate: (json: any) => void;
@@ -84,6 +93,8 @@ interface EditorProps {
   onInsertAiBlock?: () => void;
   onEditorReady?: (editor: any | null) => void;
   onRequestLinkEdit?: () => void;
+  collab?: EditorCollab | null;
+  collabUser?: { name: string; color: string };
 }
 
 export default function Editor({
@@ -94,7 +105,12 @@ export default function Editor({
   onInsertAiBlock,
   onEditorReady,
   onRequestLinkEdit,
+  collab,
+  collabUser,
 }: EditorProps) {
+  const contentRef = useRef(content);
+  contentRef.current = content;
+
   const [showSlash, setShowSlash] = useState(false);
   const [slashPos, setSlashPos] = useState({ x: 0, y: 0 });
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -105,26 +121,41 @@ export default function Editor({
   const [tableCtx, setTableCtx] = useState<{ x: number; y: number } | null>(null);
   const [tableMenuBtn, setTableMenuBtn] = useState<{ x: number; y: number } | null>(null);
 
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        history: { depth: 50 },
-      }),
+  const useCollab = Boolean(collab?.ydoc && collab?.provider && collabUser);
+
+  const extensions = useMemo(() => {
+    const starter = useCollab
+      ? StarterKit.configure({ history: false })
+      : StarterKit.configure({ history: { depth: 50 } });
+    const link = Link.configure({
+      openOnClick: false,
+      protocols: ['http', 'https', 'mailto', 'ftp'],
+      autolink: false,
+      HTMLAttributes: {
+        class: 'tiptap-link',
+        rel: 'noopener noreferrer',
+        target: undefined,
+      },
+    });
+    const table = Table.configure({
+      resizable: true,
+      HTMLAttributes: { class: 'tiptap-data-table' },
+    });
+    const collabExts =
+      useCollab && collab && collabUser
+        ? [
+            Collaboration.configure({ document: collab.ydoc }),
+            CollaborationCursor.configure({
+              provider: collab.provider,
+              user: { name: collabUser.name, color: collabUser.color },
+            }),
+          ]
+        : [];
+    return [
+      starter,
       Underline,
-      Link.configure({
-        openOnClick: false,
-        protocols: ['http', 'https', 'mailto', 'ftp'],
-        autolink: false,
-        HTMLAttributes: {
-          class: 'tiptap-link',
-          rel: 'noopener noreferrer',
-          target: undefined, // Will be set by user via popover
-        },
-      }),
-      Table.configure({
-        resizable: true,
-        HTMLAttributes: { class: 'tiptap-data-table' },
-      }),
+      link,
+      table,
       TableRow,
       TableHeader,
       TableCell,
@@ -132,8 +163,13 @@ export default function Editor({
         placeholder: 'Начните писать или нажмите / для меню блоков...',
       }),
       MwsTableExtension,
-    ],
-    content: content || undefined,
+      ...collabExts,
+    ];
+  }, [useCollab, collab, collabUser]);
+
+  const editor = useEditor({
+    extensions,
+    content: useCollab ? { type: 'doc', content: [{ type: 'paragraph' }] } : content || undefined,
     onUpdate: ({ editor }) => {
       onUpdate(editor.getJSON());
     },
@@ -244,7 +280,7 @@ export default function Editor({
         return false;
       },
     },
-  });
+  }, [extensions]);
 
   const runSlashAction = useCallback(
     (item: SlashItem) => {
@@ -338,6 +374,7 @@ export default function Editor({
   };
 
   useEffect(() => {
+    if (useCollab) return;
     if (!editor || !content) return;
     if (editor.isFocused) return;
     const currentJSON = JSON.stringify(editor.getJSON());
@@ -345,7 +382,35 @@ export default function Editor({
     if (currentJSON !== newJSON) {
       editor.commands.setContent(content, false);
     }
-  }, [content, editor]);
+  }, [content, editor, useCollab]);
+
+  useEffect(() => {
+    if (!useCollab || !collab || !editor) return;
+    let done = false;
+    const { provider, ydoc } = collab;
+    const trySeed = () => {
+      if (done) return;
+      if (!provider.synced) return;
+      const frag = ydoc.getXmlFragment('default');
+      const initial = contentRef.current;
+      if (frag.length === 0 && initial) {
+        editor.commands.setContent(initial, false);
+        done = true;
+      }
+    };
+    const iv = window.setInterval(trySeed, 50);
+    const to = window.setTimeout(() => window.clearInterval(iv), 8000);
+    trySeed();
+    return () => {
+      window.clearInterval(iv);
+      window.clearTimeout(to);
+    };
+  }, [useCollab, collab, editor]);
+
+  useEffect(() => {
+    if (!editor || !useCollab || !collabUser) return;
+    editor.commands.updateUser({ name: collabUser.name, color: collabUser.color });
+  }, [editor, useCollab, collabUser]);
 
   useEffect(() => {
     onEditorReady?.(editor || null);

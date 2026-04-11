@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../index';
+import { requireAuth } from '../middleware/requireAuth';
 
 const router = Router();
 
@@ -86,7 +87,7 @@ router.get('/meta/search', async (req: Request, res: Response) => {
   }
 });
 
-router.patch('/comments/:commentId', async (req: Request, res: Response) => {
+router.patch('/comments/:commentId', requireAuth, async (req: Request, res: Response) => {
   try {
     const { text, resolved } = req.body;
     if (text !== undefined) {
@@ -118,7 +119,7 @@ router.patch('/comments/:commentId', async (req: Request, res: Response) => {
   }
 });
 
-router.delete('/comments/:commentId', async (req: Request, res: Response) => {
+router.delete('/comments/:commentId', requireAuth, async (req: Request, res: Response) => {
   try {
     await prisma.comment.delete({ where: { id: req.params.commentId } });
     res.json({ success: true });
@@ -144,7 +145,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', requireAuth, async (req: Request, res: Response) => {
   try {
     const { title, content, icon } = req.body;
     const validTitle = validateTitle(title) || 'Без названия';
@@ -167,7 +168,7 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-router.put('/:id', async (req: Request, res: Response) => {
+router.put('/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { title, content, icon } = req.body;
     const existing = await prisma.page.findFirst({
@@ -215,7 +216,7 @@ router.put('/:id', async (req: Request, res: Response) => {
   }
 });
 
-router.delete('/:id', async (req: Request, res: Response) => {
+router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const result = await prisma.page.updateMany({
       where: { id: req.params.id, deletedAt: null },
@@ -230,7 +231,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/:id/restore', async (req: Request, res: Response) => {
+router.post('/:id/restore', requireAuth, async (req: Request, res: Response) => {
   try {
     const result = await prisma.page.updateMany({
       where: { id: req.params.id, deletedAt: { not: null } },
@@ -245,7 +246,7 @@ router.post('/:id/restore', async (req: Request, res: Response) => {
   }
 });
 
-router.delete('/:id/permanent', async (req: Request, res: Response) => {
+router.delete('/:id/permanent', requireAuth, async (req: Request, res: Response) => {
   try {
     await prisma.page.delete({ where: { id: req.params.id } });
     res.json({ success: true });
@@ -279,7 +280,7 @@ router.get('/:id/revisions', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/:id/revisions/:revisionId/restore', async (req: Request, res: Response) => {
+router.post('/:id/revisions/:revisionId/restore', requireAuth, async (req: Request, res: Response) => {
   try {
     const page = await prisma.page.findUnique({ where: { id: req.params.id } });
     const revision = await prisma.pageRevision.findUnique({ where: { id: req.params.revisionId } });
@@ -309,7 +310,7 @@ router.post('/:id/revisions/:revisionId/restore', async (req: Request, res: Resp
   }
 });
 
-router.delete('/:id/revisions/:revisionId', async (req: Request, res: Response) => {
+router.delete('/:id/revisions/:revisionId', requireAuth, async (req: Request, res: Response) => {
   try {
     const revision = await prisma.pageRevision.findUnique({ where: { id: req.params.revisionId } });
     if (!revision || revision.pageId !== req.params.id) {
@@ -335,7 +336,7 @@ router.get('/:id/comments', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/:id/comments', async (req: Request, res: Response) => {
+router.post('/:id/comments', requireAuth, async (req: Request, res: Response) => {
   try {
     const { text, blockId } = req.body;
     
@@ -362,14 +363,11 @@ router.post('/:id/comments', async (req: Request, res: Response) => {
       validatedBlockId = blockId;
     }
     
-    // SECURITY: NEVER trust authorId from client
-    // Always use hardcoded "Вы" as author
-    // In future with authentication, use req.user.id or req.user.name
     const comment = await prisma.comment.create({
       data: {
         pageId: req.params.id,
         text: trimmedText,
-        authorId: 'Вы', // Hardcoded - prevents impersonation
+        authorId: req.authUser!.name,
         blockId: validatedBlockId,
       },
     });

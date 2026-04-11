@@ -7,6 +7,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  avatarColor  String   @default("#6366f1")
+  createdAt    DateTime @default(now())
+}
+
 model Page {
   id        String    @id @default(uuid())
   title     String    @default("Без названия")

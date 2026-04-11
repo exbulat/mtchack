@@ -1,15 +1,22 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
+import * as Y from 'yjs';
+import { Awareness } from 'y-protocols/awareness';
+import { HocuspocusProvider } from '@hocuspocus/provider';
 import Backlinks from '../components/Backlinks';
 import Editor from '../components/Editor';
 import SaveStatus from '../components/SaveStatus';
 import { api, PageComment } from '../lib/api';
 import { useAutosave } from '../hooks/useAutosave';
 import { PagesListContext } from '../components/Sidebar';
+import { useAuth } from '../context/AuthContext';
+import type { EditorCollab } from '../components/Editor';
 
 export default function PageEditor() {
   const { id } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const pageId = id && id !== 'new' ? id : null;
   const [title, setTitle] = useState('Без названия');
   const [content, setContent] = useState<any>({ type: 'doc', content: [{ type: 'paragraph' }] });
@@ -37,6 +44,31 @@ export default function PageEditor() {
   const { bumpPagesList } = useContext(PagesListContext);
   const titleDebounceRef = useRef<number | null>(null);
   const skipTitleDebounceRef = useRef(true);
+
+  const [collab, setCollab] = useState<EditorCollab | null>(null);
+
+  useEffect(() => {
+    if (!pageId || !user) {
+      setCollab(null);
+      return;
+    }
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${window.location.host}/ws`;
+    const ydoc = new Y.Doc();
+    const awareness = new Awareness(ydoc);
+    const provider = new HocuspocusProvider({
+      url,
+      name: pageId,
+      document: ydoc,
+      awareness,
+    });
+    setCollab({ ydoc, provider });
+    return () => {
+      provider.destroy();
+      ydoc.destroy();
+      setCollab(null);
+    };
+  }, [pageId, user?.id]);
 
   const { isSaving, lastSavedAt, saveError, saveNow } = useAutosave({
     pageId,
@@ -333,7 +365,7 @@ export default function PageEditor() {
     const text = commentDraft.trim();
     if (!text) return;
     const targetPageId = await ensurePageForBlocks();
-    const created = await api.createComment(targetPageId, { text, authorId: 'Вы' });
+    const created = await api.createComment(targetPageId, { text });
     setComments((prev) => [created, ...prev]);
     setCommentDraft('');
   };
@@ -374,8 +406,20 @@ export default function PageEditor() {
     setRevisions((prev) => prev.filter((item) => item.id !== revisionId));
   };
 
+  if ((pageId || location.pathname === '/new') && authLoading) {
+    return <div className="loading">Загрузка…</div>;
+  }
+
+  if (!authLoading && !user && (pageId || location.pathname === '/new')) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
   if (loading) {
     return <div className="loading">Загрузка страницы...</div>;
+  }
+
+  if (pageId && user && !collab) {
+    return <div className="loading">Подключение совместного редактора…</div>;
   }
 
   return (
@@ -455,6 +499,7 @@ export default function PageEditor() {
             />
             <SaveStatus isSaving={isSaving} lastSavedAt={lastSavedAt} error={saveError} />
             <Editor
+              key={pageId ? `${pageId}-${collab ? 'y' : 'n'}` : 'draft'}
               content={content}
               onUpdate={setContent}
               onSave={saveNow}
@@ -462,6 +507,10 @@ export default function PageEditor() {
               onInsertAiBlock={insertAiBlock}
               onEditorReady={setEditorInstance}
               onRequestLinkEdit={openLinkPopover}
+              collab={pageId ? collab : null}
+              collabUser={
+                user ? { name: user.name, color: user.avatarColor } : undefined
+              }
             />
 
             {pageId && <Backlinks pageId={pageId} />}
