@@ -4,7 +4,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     ports:
-      - '5432:5432'
+      - '5433:5432'
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-wikilive}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wikilive_secure_min_12_chars}
