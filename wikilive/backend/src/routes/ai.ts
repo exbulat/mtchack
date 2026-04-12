@@ -15,11 +15,30 @@ interface GptResponse {
   error?: { message?: string };
 }
 
+type AiContextMode = 'disabled' | 'redact' | 'allow';
+
 function validatePrompt(prompt: unknown): string | null {
   if (typeof prompt !== 'string') return null;
   const trimmed = prompt.trim();
   if (trimmed.length === 0 || trimmed.length > 5000) return null;
   return trimmed;
+}
+
+function getAiContextMode(): AiContextMode {
+  const rawMode = (process.env.AI_CONTEXT_MODE || 'disabled').trim().toLowerCase();
+  if (rawMode === 'allow' || rawMode === 'redact') {
+    return rawMode;
+  }
+  return 'disabled';
+}
+
+function redactSensitiveContent(input: string): string {
+  return input
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[REDACTED_EMAIL]')
+    .replace(/\b(?:sk|usk)-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_API_KEY]')
+    .replace(/\bBearer\s+[A-Za-z0-9._-]+\b/gi, 'Bearer [REDACTED_TOKEN]')
+    .replace(/\b(?:password|passwd|token|secret|cookie_secret)\s*[:=]\s*[^\s'"]+/gi, '[REDACTED_SECRET]')
+    .replace(/\beyJ[A-Za-z0-9._-]{20,}\b/g, '[REDACTED_JWT]');
 }
 
 router.post('/chat', async (req: Request, res: Response) => {
@@ -31,12 +50,26 @@ router.post('/chat', async (req: Request, res: Response) => {
   }
 
   try {
-    const { prompt, context } = req.body;
+    const { prompt, context, includeContext } = req.body;
     const validatedPrompt = validatePrompt(prompt);
     if (!validatedPrompt) {
       return res.status(400).json({ error: 'Prompt is required and must be 1-5000 characters' });
     }
-    const validatedContext = typeof context === 'string' ? context.substring(0, 10000) : '';
+
+    const wantsContext = includeContext === true;
+    const rawContext = typeof context === 'string' ? context.substring(0, 10000) : '';
+    const contextMode = getAiContextMode();
+
+    if (wantsContext && contextMode === 'disabled') {
+      return res.status(403).json({ error: 'Sending page content to AI is disabled by server policy' });
+    }
+
+    const validatedContext =
+      wantsContext && rawContext
+        ? contextMode === 'redact'
+          ? redactSensitiveContent(rawContext)
+          : rawContext
+        : '';
 
     const messages: ChatMessage[] = [
       {

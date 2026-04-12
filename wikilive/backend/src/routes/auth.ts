@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../index';
 import { AUTH_COOKIE, signAuthToken } from '../auth-tokens';
 import { authLimiter } from '../middleware/rateLimiter';
+
 const router = Router();
 
 const AVATAR_COLORS = [
@@ -26,7 +27,7 @@ function validateEmail(email: unknown): string | null {
 
 function validatePassword(password: unknown): string | null {
   if (typeof password !== 'string') return null;
-  if (password.length < 6 || password.length > 200) return null;
+  if (password.length < 10 || password.length > 200) return null;
   return password;
 }
 
@@ -58,7 +59,7 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
     const password = validatePassword(req.body?.password);
     const name = validateName(req.body?.name);
     if (!email || !password || !name) {
-      res.status(400).json({ error: 'Некорректные email, пароль или имя' });
+      res.status(400).json({ error: 'Некорректные email, пароль или имя. Пароль должен быть длиной не менее 10 символов.' });
       return;
     }
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -96,7 +97,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
     const email = validateEmail(req.body?.email);
     const password = validatePassword(req.body?.password);
     if (!email || !password) {
-      res.status(400).json({ error: 'Некорректные email или пароль' });
+      res.status(400).json({ error: 'Некорректные email или пароль. Пароль должен быть длиной не менее 10 символов.' });
       return;
     }
     const user = await prisma.user.findUnique({ where: { email } });
@@ -152,7 +153,6 @@ router.patch('/me', async (req: Request, res: Response) => {
       data: updates,
     });
     const authUser = { id: user.id, email: user.email, name: user.name, avatarColor: user.avatarColor };
-    // обновляем куку
     const token = signAuthToken(authUser);
     res.cookie(AUTH_COOKIE, token, {
       httpOnly: true,

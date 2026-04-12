@@ -13,6 +13,33 @@ import {
 const router = Router();
 const DEFAULT_PAGE_TITLE = 'Без названия';
 
+const SAFE_SPACE_SELECT = {
+  id: true,
+  name: true,
+  icon: true,
+  color: true,
+  ownerId: true,
+  createdAt: true,
+  updatedAt: true,
+  deletedAt: true,
+} satisfies Prisma.SpaceSelect;
+
+const SAFE_SPACE_MEMBER_WITH_USER_SELECT = {
+  id: true,
+  spaceId: true,
+  userId: true,
+  role: true,
+  invitedAt: true,
+  user: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      avatarColor: true,
+    },
+  },
+} satisfies Prisma.SpaceMemberSelect;
+
 async function getUniqueSpacePageTitle(spaceId: string, title: string): Promise<string> {
   const normalizedBase = title.trim() || DEFAULT_PAGE_TITLE;
   const pages = await prisma.page.findMany({
@@ -82,7 +109,7 @@ router.get('/', async (req: Request, res: Response) => {
     const userId = req.authUser!.id;
     const owned = await prisma.space.findMany({
       where: { ownerId: userId, deletedAt: null },
-      include: { owner: true, members: { include: { user: true } }, files: true },
+      select: SAFE_SPACE_SELECT,
     });
     const joined = await prisma.space.findMany({
       where: {
@@ -91,7 +118,7 @@ router.get('/', async (req: Request, res: Response) => {
           { members: { some: { userId } } },
         ],
       },
-      include: { owner: true, members: { include: { user: true } }, files: true },
+      select: SAFE_SPACE_SELECT,
     });
     const all = [...owned, ...joined.filter((s) => !owned.find((o) => o.id === s.id))];
     res.json(all);
@@ -105,7 +132,7 @@ router.get('/:spaceId', loadSpaceMember, requireSpaceMember, async (req: Request
     const spaceId = req.params.spaceId!;
     const space = await prisma.space.findUnique({
       where: { id: spaceId },
-      include: { owner: true, members: { include: { user: true } }, files: true },
+      select: SAFE_SPACE_SELECT,
     });
     if (!space) return res.status(404).json({ error: 'Space not found' });
     res.json(space);
@@ -117,7 +144,15 @@ router.get('/:spaceId', loadSpaceMember, requireSpaceMember, async (req: Request
 router.get('/:spaceId/members', loadSpaceMember, requireSpaceMember, async (req: Request, res: Response) => {
   try {
     const spaceId = req.params.spaceId!;
-    const space = await prisma.space.findUnique({ where: { id: spaceId }, include: { members: { include: { user: true } } } });
+    const space = await prisma.space.findUnique({
+      where: { id: spaceId },
+      select: {
+        id: true,
+        members: {
+          select: SAFE_SPACE_MEMBER_WITH_USER_SELECT,
+        },
+      },
+    });
     if (!space) {
       console.warn('[404] space members not found', { spaceId, userId: req.authUser!.id });
       return res.status(404).json({ error: 'Space not found' });
@@ -150,7 +185,7 @@ router.post('/:spaceId/members', loadSpaceMember, requireSpaceRole('ADMIN'), asy
     if (existing) return res.status(409).json({ error: 'Пользователь уже участник' });
     const invited = await prisma.spaceMember.create({
       data: { spaceId, userId: targetUser.id, role: validRole },
-      include: { user: true },
+      select: SAFE_SPACE_MEMBER_WITH_USER_SELECT,
     });
     res.json(invited);
   } catch {
@@ -174,14 +209,13 @@ router.patch('/:spaceId/members/:userId', loadSpaceMember, requireSpaceRole('ADM
     if (ROLE_HIERARCHY[target.role]! >= myLevel) {
       return res.status(403).json({ error: 'Cannot modify member with equal or higher role' });
     }
-    // Не позволяем OWNER'у снять с себя роль через этот эндпоинт
     if (target.role === 'OWNER') {
       return res.status(403).json({ error: 'Cannot change OWNER role' });
     }
     const updated = await prisma.spaceMember.update({
       where: { id: target.id },
       data: { role: validRole },
-      include: { user: true },
+      select: SAFE_SPACE_MEMBER_WITH_USER_SELECT,
     });
     res.json(updated);
   } catch {
@@ -208,8 +242,6 @@ router.delete('/:spaceId/members/:userId', loadSpaceMember, requireSpaceRole('AD
     res.status(500).json({ error: 'Failed to remove member' });
   }
 });
-
-// ── Страницы пространства ──
 
 router.get('/:spaceId/pages', loadSpaceMember, requireSpaceMember, async (req: Request, res: Response) => {
   try {
@@ -251,8 +283,6 @@ router.post('/:spaceId/pages', loadSpaceMember, requireSpaceRole('EDITOR'), asyn
     res.status(500).json({ error: 'Failed to create page in space' });
   }
 });
-
-// ── Файлы пространства ──
 
 router.post('/:spaceId/files', loadSpaceMember, requireSpaceRole('EDITOR'), async (req: Request, res: Response) => {
   try {

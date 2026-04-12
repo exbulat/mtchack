@@ -214,10 +214,10 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  aiChat: (prompt: string, context?: string) =>
+  aiChat: (prompt: string, context?: string, includeContext: boolean = false) =>
     request<{ reply: string }>('/ai/chat', {
       method: 'POST',
-      body: JSON.stringify({ prompt, context }),
+      body: JSON.stringify({ prompt, context, includeContext }),
     }),
 
   aiSuggest: (text: string, action: string) =>

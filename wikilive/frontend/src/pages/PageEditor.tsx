@@ -16,6 +16,7 @@ import FloatingComments, { FloatingPanel } from '../components/FloatingComments'
 
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
 const LAST_SPACE_PAGE_KEY_PREFIX = 'wikilive-last-space-page:';
+const DRAFT_KEY_PREFIX = 'wikilive-page-draft:';
 type ChainWithImage = ReturnType<TiptapEditor['chain']> & {
   setImage: (attrs: { src: string }) => ReturnType<TiptapEditor['chain']>;
 };
@@ -41,6 +42,22 @@ function normalizeEditorContent(value: unknown): JSONContent {
   return node;
 }
 
+function readDraftFromSession(pageId: string): { updatedAt?: number; title?: string; content?: unknown; expiresAt?: number } | null {
+  try {
+    const raw = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}${pageId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { updatedAt?: number; title?: string; content?: unknown; expiresAt?: number };
+    if (parsed.expiresAt && parsed.expiresAt < Date.now()) {
+      sessionStorage.removeItem(`${DRAFT_KEY_PREFIX}${pageId}`);
+      return null;
+    }
+    return parsed;
+  } catch {
+    sessionStorage.removeItem(`${DRAFT_KEY_PREFIX}${pageId}`);
+    return null;
+  }
+}
+
 export default function PageEditor() {
   const { id, spaceId } = useParams<{ id?: string; spaceId?: string }>();
   const location = useLocation();
@@ -57,6 +74,7 @@ export default function PageEditor() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiMode, setAiMode] = useState<'page' | 'search'>('page');
   const [aiResult, setAiResult] = useState('');
+  const [aiShareContext, setAiShareContext] = useState(false);
   const [description, setDescription] = useState('');
   const [showComments, setShowComments] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
@@ -142,17 +160,12 @@ export default function PageEditor() {
 
         let nextTitle = page.title || 'Без названия';
         let nextContent = normalizeEditorContent(page.content);
-        const localRaw = localStorage.getItem(`wikilive-page-${pageId}`);
-        if (localRaw) {
-          try {
-            const localData = JSON.parse(localRaw) as { updatedAt?: number; title?: string; content?: unknown };
-            const serverTs = new Date(page.updatedAt).getTime();
-            if ((localData.updatedAt || 0) > serverTs) {
-              nextTitle = localData.title || nextTitle;
-              nextContent = normalizeEditorContent(localData.content) || nextContent;
-            }
-          } catch {
-            localStorage.removeItem(`wikilive-page-${pageId}`);
+        const localData = readDraftFromSession(pageId);
+        if (localData) {
+          const serverTs = new Date(page.updatedAt).getTime();
+          if ((localData.updatedAt || 0) > serverTs) {
+            nextTitle = localData.title || nextTitle;
+            nextContent = normalizeEditorContent(localData.content) || nextContent;
           }
         }
         setTitle(nextTitle);
@@ -268,7 +281,7 @@ export default function PageEditor() {
     setAiResult('');
     try {
       let contextForAi = '';
-      if (aiMode === 'search') {
+      if (aiShareContext && aiMode === 'search') {
         try {
           const found = await api.searchPages(aiPrompt, spaceId ?? null);
           const pages = await Promise.all(
@@ -279,12 +292,12 @@ export default function PageEditor() {
             .map((p) => `=== ${p!.title} ===\n${extractText(p!.content as JSONContent)}`)
             .join('\n\n');
         } catch { /* ignore, use empty context */ }
-      } else {
+      } else if (aiShareContext) {
         const text = extractText(content);
         contextForAi = `Файл: ${title}\nОписание: ${description || '-'}\nТекст файла:\n${text}`;
       }
 
-      const res = await api.aiChat(aiPrompt, contextForAi);
+      const res = await api.aiChat(aiPrompt, contextForAi, aiShareContext);
       if (!res.reply) return;
 
       if (aiMode === 'search') {
@@ -894,6 +907,15 @@ export default function PageEditor() {
               }
               disabled={aiLoading}
             />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
+              <input
+                type="checkbox"
+                checked={aiShareContext}
+                onChange={(e) => setAiShareContext(e.target.checked)}
+                disabled={aiLoading}
+              />
+              Отправлять контекст страниц в AI
+            </label>
             <div className="ai-block-actions">
               {aiLoading ? (
                 <span className="ai-loading-text">Генерация...</span>

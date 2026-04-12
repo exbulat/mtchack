@@ -9,7 +9,9 @@ interface UseAutosaveArgs {
 }
 
 const DEBOUNCE_MS = 1500;
-const RETRY_DELAYS = [2000, 5000, 15000]; // 3 retries with backoff
+const RETRY_DELAYS = [2000, 5000, 15000];
+const DRAFT_KEY_PREFIX = 'wikilive-page-draft:';
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function useAutosave({ pageId, title, content, enabled = true }: UseAutosaveArgs) {
   const [isSaving, setIsSaving] = useState(false);
@@ -45,7 +47,6 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
     retryCountRef.current = 0;
   }, [pageId]);
 
-  // Always track latest values for retry
   useEffect(() => {
     latestRef.current = { title, content };
   }, [title, content]);
@@ -53,14 +54,22 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
   const persistLocal = useCallback(
     (t: string, c: Record<string, unknown>) => {
       if (!pageId) return;
-      const key = `wikilive-page-${pageId}`;
+      const key = `${DRAFT_KEY_PREFIX}${pageId}`;
       try {
-        localStorage.setItem(key, JSON.stringify({ title: t, content: c, updatedAt: Date.now() }));
+        sessionStorage.setItem(
+          key,
+          JSON.stringify({
+            title: t,
+            content: c,
+            updatedAt: Date.now(),
+            expiresAt: Date.now() + DRAFT_TTL_MS,
+          }),
+        );
       } catch {
-        // localStorage might be full — non-critical
+        // sessionStorage might be full or unavailable.
       }
     },
-    [pageId]
+    [pageId],
   );
 
   useEffect(() => {
@@ -79,39 +88,12 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
         return false;
       }
     },
-    [pageId]
+    [pageId],
   );
-
-  const saveNow = useCallback(async () => {
-    if (!pageId) return;
-    // Cancel any pending retry
-    if (retryRef.current) {
-      window.clearTimeout(retryRef.current);
-      retryRef.current = null;
-    }
-    retryCountRef.current = 0;
-
-    const { title: t, content: c } = latestRef.current;
-    setIsSaving(true);
-    setPendingChanges(false);
-
-    // Always save to localStorage first as fast local backup
-    persistLocal(t, c);
-
-    const ok = await attemptServerSave(t, c);
-    if (ok) {
-      setSaveError(false);
-      setLastSavedAt(Date.now());
-    } else {
-      setSaveError(true);
-      scheduleRetry();
-    }
-    setIsSaving(false);
-  }, [pageId, persistLocal, attemptServerSave]);
 
   const scheduleRetry = useCallback(() => {
     const attempt = retryCountRef.current;
-    if (attempt >= RETRY_DELAYS.length) return; // gave up after max retries
+    if (attempt >= RETRY_DELAYS.length) return;
 
     const delay = RETRY_DELAYS[attempt];
     retryCountRef.current += 1;
@@ -132,7 +114,31 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
     }, delay);
   }, [persistLocal, attemptServerSave]);
 
-  // Debounced autosave — triggers on content/title changes
+  const saveNow = useCallback(async () => {
+    if (!pageId) return;
+    if (retryRef.current) {
+      window.clearTimeout(retryRef.current);
+      retryRef.current = null;
+    }
+    retryCountRef.current = 0;
+
+    const { title: t, content: c } = latestRef.current;
+    setIsSaving(true);
+    setPendingChanges(false);
+
+    persistLocal(t, c);
+
+    const ok = await attemptServerSave(t, c);
+    if (ok) {
+      setSaveError(false);
+      setLastSavedAt(Date.now());
+    } else {
+      setSaveError(true);
+      scheduleRetry();
+    }
+    setIsSaving(false);
+  }, [pageId, persistLocal, attemptServerSave, scheduleRetry]);
+
   useEffect(() => {
     if (!pageId || !enabled) return;
     if (skipNextAutosaveRef.current) {
@@ -147,7 +153,6 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
     };
   }, [pageId, enabled, title, content, saveNow]);
 
-  // Cleanup retries on unmount
   useEffect(() => {
     return () => {
       if (retryRef.current) window.clearTimeout(retryRef.current);
