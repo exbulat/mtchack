@@ -12,7 +12,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
 
-  const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname || '/new';
+  const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname || '/';
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

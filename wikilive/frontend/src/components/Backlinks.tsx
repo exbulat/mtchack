@@ -4,9 +4,10 @@ import { api, BacklinkPage } from '../lib/api';
 
 interface BacklinksProps {
   pageId: string;
+  currentSpaceId?: string | null;
 }
 
-export default function Backlinks({ pageId }: BacklinksProps) {
+export default function Backlinks({ pageId, currentSpaceId }: BacklinksProps) {
   const [links, setLinks] = useState<BacklinkPage[]>([]);
 
   useEffect(() => {
@@ -33,11 +34,19 @@ export default function Backlinks({ pageId }: BacklinksProps) {
         <div className="backlinks-empty">Нет обратных ссылок</div>
       ) : (
         <div className="backlinks-list">
-          {links.map((item) => (
-            <Link key={item.id} className="backlinks-item" to={`/page/${item.id}`}>
-              {item.title || 'Без названия'}
-            </Link>
-          ))}
+          {links.map((item) => {
+            const href = item.spaceId
+              ? `/spaces/${item.spaceId}/page/${item.id}`
+              : currentSpaceId
+                ? `/spaces/${currentSpaceId}/page/${item.id}`
+                : `/page/${item.id}`;
+
+            return (
+              <Link key={item.id} className="backlinks-item" to={href}>
+                {item.title || 'Без названия'}
+              </Link>
+            );
+          })}
         </div>
       )}
     </section>

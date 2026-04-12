@@ -21,7 +21,7 @@ export function PagesListProvider({ children }: { children: React.ReactNode }) {
 export default function RightSidebar() {
   const { activeSpace } = useSpaces();
   const navigate = useNavigate();
-  const params = useParams<{ spaceId?: string; pageId?: string }>();
+  const params = useParams<{ spaceId?: string; id?: string }>();
   const currentSpaceId = params.spaceId ?? activeSpace?.id;
 
   const [pages, setPages] = useState<PageSummary[]>([]);
@@ -205,7 +205,7 @@ export default function RightSidebar() {
           </div>
         ) : (
           filteredPages.map((p) => {
-            const isActive = params.pageId === p.id;
+            const isActive = params.id === p.id;
             return (
               <NavLink
                 key={p.id}

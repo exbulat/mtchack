@@ -1,16 +1,20 @@
 import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as d3 from 'd3';
 import { api } from '../lib/api';
+import { useSpaces } from '../context/SpaceContext';
 
 export default function GraphView() {
   const ref = useRef<SVGSVGElement | null>(null);
+  const navigate = useNavigate();
+  const { activeSpace } = useSpaces();
 
   useEffect(() => {
     let mounted = true;
 
     async function renderGraph() {
       try {
-        const data = await api.getGraph();
+        const data = await api.getGraph(activeSpace?.id ?? null);
         if (!mounted || !ref.current) return;
 
         const svg = d3.select(ref.current);
@@ -19,11 +23,16 @@ export default function GraphView() {
         const width = ref.current.clientWidth || 800;
         const height = ref.current.clientHeight || 600;
 
-        type GraphNode = { id: string; title: string; icon: string } & d3.SimulationNodeDatum;
+        type GraphNode = {
+          id: string;
+          title: string;
+          icon: string;
+          spaceId?: string | null;
+        } & d3.SimulationNodeDatum;
         type GraphLink = d3.SimulationLinkDatum<GraphNode>;
 
-        const simNodes: GraphNode[] = data.nodes.map((n) => ({ ...n }));
-        const simLinks: GraphLink[] = data.edges.map((e) => ({ source: e.source, target: e.target }));
+        const simNodes: GraphNode[] = data.nodes.map((node) => ({ ...node }));
+        const simLinks: GraphLink[] = data.edges.map((edge) => ({ source: edge.source, target: edge.target }));
 
         const simulation = d3
           .forceSimulation<GraphNode>(simNodes)
@@ -45,7 +54,14 @@ export default function GraphView() {
           .data(simNodes)
           .join('circle')
           .attr('r', 10)
-          .attr('fill', '#2563eb');
+          .attr('fill', '#2563eb')
+          .style('cursor', 'pointer')
+          .on('click', (_event, node) => {
+            const href = node.spaceId
+              ? `/spaces/${node.spaceId}/page/${node.id}`
+              : `/page/${node.id}`;
+            navigate(href);
+          });
 
         const labels = svg
           .append('g')
@@ -67,18 +83,25 @@ export default function GraphView() {
           nodes.attr('cx', (d) => d.x ?? 0).attr('cy', (d) => d.y ?? 0);
           labels.attr('x', (d) => d.x ?? 0).attr('y', (d) => d.y ?? 0);
         });
-      } catch { /* ignore */ }
+      } catch {
+        if (ref.current) {
+          d3.select(ref.current).selectAll('*').remove();
+        }
+      }
     }
 
-    renderGraph();
+    void renderGraph();
 
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [activeSpace?.id, navigate]);
 
   return (
     <div className="graph-container">
+      <div style={{ padding: '16px 20px 0', fontSize: 13, color: 'var(--text-secondary)' }}>
+        {activeSpace ? `Граф связей пространства "${activeSpace.name}"` : 'Граф личных страниц'}
+      </div>
       <svg ref={ref} />
     </div>
   );

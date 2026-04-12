@@ -1,23 +1,26 @@
 import { useContext, useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { PagesListContext } from '../components/RightSidebar';
+import { useSpaces } from '../context/SpaceContext';
 
 interface TrashItem {
   id: string;
   title: string;
   icon: string;
   deletedAt: string;
+  spaceId?: string | null;
 }
 
 export default function TrashView() {
   const [items, setItems] = useState<TrashItem[]>([]);
   const [loading, setLoading] = useState(true);
   const { bumpPagesList } = useContext(PagesListContext);
+  const { activeSpace } = useSpaces();
 
   const load = async () => {
     setLoading(true);
     try {
-      const data = await api.listTrash();
+      const data = activeSpace?.id ? await api.listTrashBySpace(activeSpace.id) : await api.listTrash();
       setItems(data);
     } catch {
       setItems([]);
@@ -27,18 +30,18 @@ export default function TrashView() {
   };
 
   useEffect(() => {
-    load();
-  }, []);
+    void load();
+  }, [activeSpace?.id]);
 
   const restore = async (id: string) => {
     await api.restorePage(id);
-    setItems((prev) => prev.filter((p) => p.id !== id));
+    setItems((prev) => prev.filter((page) => page.id !== id));
     bumpPagesList();
   };
 
   const permanentDelete = async (id: string) => {
     await api.permanentDeletePage(id);
-    setItems((prev) => prev.filter((p) => p.id !== id));
+    setItems((prev) => prev.filter((page) => page.id !== id));
     bumpPagesList();
   };
 
@@ -48,7 +51,9 @@ export default function TrashView() {
 
   return (
     <div className="trash-view">
-      <h2 className="trash-title">Корзина</h2>
+      <h2 className="trash-title">
+        {activeSpace ? `Корзина пространства "${activeSpace.name}"` : 'Корзина'}
+      </h2>
       {items.length === 0 ? (
         <div className="trash-empty">Корзина пуста</div>
       ) : (
@@ -64,10 +69,10 @@ export default function TrashView() {
                 </div>
               </div>
               <div className="trash-item-actions">
-                <button className="btn btn-primary" onClick={() => restore(item.id)}>
+                <button className="btn btn-primary" onClick={() => void restore(item.id)}>
                   Восстановить
                 </button>
-                <button className="btn btn-danger" onClick={() => permanentDelete(item.id)}>
+                <button className="btn btn-danger" onClick={() => void permanentDelete(item.id)}>
                   Удалить навсегда
                 </button>
               </div>

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import RequireAuthGuard from './components/RequireAuthGuard';
+import RequireSpaceGuard from './components/RequireSpaceGuard';
 import PageEditor from './pages/PageEditor';
 import CreateSpacePage from './pages/CreateSpacePage';
 import WelcomePage from './pages/WelcomePage';
@@ -29,14 +30,16 @@ function App() {
             <Route element={<RequireAuthGuard />}>
               <Route element={<Layout />}>
                 <Route path="/" element={<CreateSpacePage />} />
-                <Route path="/spaces/:spaceId" element={<WelcomePage />} />
-                <Route path="/spaces/:spaceId/page/:id" element={<PageEditor />} />
-                <Route path="/spaces/:spaceId/settings" element={<SpaceSettings />} />
-                <Route path="/new" element={<PageEditor />} />
-                <Route path="/page/:id" element={<PageEditor />} />
-                <Route path="/graph" element={<GraphView />} />
-                <Route path="/trash" element={<TrashView />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route element={<RequireSpaceGuard />}>
+                  <Route path="/spaces/:spaceId" element={<WelcomePage />} />
+                  <Route path="/spaces/:spaceId/page/:id" element={<PageEditor />} />
+                  <Route path="/spaces/:spaceId/settings" element={<SpaceSettings />} />
+                  <Route path="/new" element={<PageEditor />} />
+                  <Route path="/page/:id" element={<PageEditor />} />
+                  <Route path="/graph" element={<GraphView />} />
+                  <Route path="/trash" element={<TrashView />} />
+                </Route>
               </Route>
             </Route>
           </Routes>

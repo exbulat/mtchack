@@ -24,7 +24,7 @@ model User {
 model Page {
   id        String    @id @default(uuid())
   title     String    @default("Без названия")
-  content   Json      @default("{}")
+  content   Json      @default("{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}")
   icon      String    @default("")
   ownerId   String?
   spaceId   String?   @map("space_id")

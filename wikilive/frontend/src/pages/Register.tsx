@@ -23,7 +23,7 @@ export default function Register() {
         password,
       });
       await refresh();
-      navigate('/new', { replace: true });
+      navigate('/', { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка регистрации');
     } finally {

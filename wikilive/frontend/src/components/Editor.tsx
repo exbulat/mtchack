@@ -82,6 +82,21 @@ function consumeSlashBeforeCursor(editor: TiptapEditor) {
 }
 
 const TABLE_GRID_MAX = 6;
+const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
+
+function isValidEditorContent(value: unknown): value is JSONContent {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'type' in (value as Record<string, unknown>) &&
+    (value as Record<string, unknown>).type === 'doc' &&
+    Array.isArray((value as Record<string, unknown>).content)
+  );
+}
+
+function normalizeEditorContent(value: unknown): JSONContent {
+  return isValidEditorContent(value) ? (value as JSONContent) : EMPTY_DOC;
+}
 
 export interface EditorCollab {
   ydoc: Y.Doc;
@@ -98,6 +113,7 @@ interface EditorProps {
   onRequestLinkEdit?: () => void;
   collab?: EditorCollab | null;
   collabUser?: { name: string; color: string };
+  currentSpaceId?: string | null;
 }
 
 export default function Editor({
@@ -110,6 +126,7 @@ export default function Editor({
   onRequestLinkEdit,
   collab,
   collabUser,
+  currentSpaceId,
 }: EditorProps) {
   const navigate = useNavigate();
   const contentRef = useRef(content);
@@ -132,18 +149,24 @@ export default function Editor({
   const handleWikiNavigate = useCallback(
     async (title: string) => {
       try {
-        const results = await api.searchPages(title);
+        const results = await api.searchPages(title, currentSpaceId);
         if (results.length > 0 && results[0]) {
-          navigate(`/page/${results[0].id}`);
+          const target = results[0];
+          navigate(target.spaceId ? `/spaces/${target.spaceId}/page/${target.id}` : `/page/${target.id}`);
         } else {
-          // Page doesn't exist — navigate to new page with pre-filled title
-          navigate(`/new?title=${encodeURIComponent(title)}`);
+          const created = currentSpaceId
+            ? await api.createSpacePage(currentSpaceId, { title })
+            : await api.createPage({ title });
+          navigate(currentSpaceId ? `/spaces/${currentSpaceId}/page/${created.id}` : `/page/${created.id}`);
         }
       } catch {
-        navigate(`/new?title=${encodeURIComponent(title)}`);
+        const created = currentSpaceId
+          ? await api.createSpacePage(currentSpaceId, { title })
+          : await api.createPage({ title });
+        navigate(currentSpaceId ? `/spaces/${currentSpaceId}/page/${created.id}` : `/page/${created.id}`);
       }
     },
-    [navigate]
+    [navigate, currentSpaceId]
   );
 
   const extensions = useMemo(() => {
@@ -196,7 +219,7 @@ export default function Editor({
 
   const editor = useEditor({
     extensions,
-    content: useCollab ? { type: 'doc', content: [{ type: 'paragraph' }] } : content || undefined,
+    content: useCollab ? EMPTY_DOC : normalizeEditorContent(content),
     onUpdate: ({ editor }) => {
       onUpdate(editor.getJSON());
     },
@@ -390,7 +413,7 @@ export default function Editor({
       if (done) return;
       if (!provider.synced) return;
       const frag = ydoc.getXmlFragment('default');
-      const initial = contentRef.current;
+      const initial = normalizeEditorContent(contentRef.current);
       if (frag.length === 0 && initial) {
         editor.commands.setContent(initial, false);
         done = true;

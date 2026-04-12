@@ -20,6 +20,7 @@ export interface PageSummary {
   title: string;
   icon: string;
   updatedAt: string;
+  spaceId?: string | null;
 }
 
 export interface Page {
@@ -30,7 +31,7 @@ export interface Page {
   createdAt: string;
   updatedAt: string;
   incomingLinks: Array<{
-    source: { id: string; title: string; icon: string };
+    source: { id: string; title: string; icon: string; spaceId?: string | null };
   }>;
 }
 
@@ -38,6 +39,7 @@ export interface BacklinkPage {
   id: string;
   title: string;
   icon: string;
+  spaceId?: string | null;
 }
 
 export interface PageComment {
@@ -122,7 +124,12 @@ export const api = {
     request<{ success: boolean }>(`/pages/${id}`, { method: 'DELETE' }),
 
   listTrash: () =>
-    request<Array<{ id: string; title: string; icon: string; deletedAt: string }>>('/pages/meta/trash'),
+    request<Array<{ id: string; title: string; icon: string; deletedAt: string; spaceId?: string | null }>>('/pages/meta/trash'),
+
+  listTrashBySpace: (spaceId: string) =>
+    request<Array<{ id: string; title: string; icon: string; deletedAt: string; spaceId?: string | null }>>(
+      `/pages/meta/trash?spaceId=${encodeURIComponent(spaceId)}`
+    ),
 
   restorePage: (id: string) =>
     request<{ success: boolean }>(`/pages/${id}/restore`, { method: 'POST' }),
@@ -132,14 +139,16 @@ export const api = {
 
   getBacklinks: (id: string) => request<BacklinkPage[]>(`/pages/${id}/backlinks`),
 
-  searchPages: (q: string) =>
-    request<Array<{ id: string; title: string; icon: string }>>(`/pages/meta/search?q=${encodeURIComponent(q)}`),
+  searchPages: (q: string, spaceId?: string | null) =>
+    request<Array<{ id: string; title: string; icon: string; spaceId?: string | null }>>(
+      `/pages/meta/search?q=${encodeURIComponent(q)}${spaceId ? `&spaceId=${encodeURIComponent(spaceId)}` : ''}`
+    ),
 
-  getGraph: () =>
+  getGraph: (spaceId?: string | null) =>
     request<{
-      nodes: Array<{ id: string; title: string; icon: string }>;
+      nodes: Array<{ id: string; title: string; icon: string; spaceId?: string | null }>;
       edges: Array<{ source: string; target: string }>;
-    }>('/pages/meta/graph'),
+    }>(`/pages/meta/graph${spaceId ? `?spaceId=${encodeURIComponent(spaceId)}` : ''}`),
 
   requestRevisions: (id: string) => request<Array<{ id: string; pageId: string; createdAt: string; content: Record<string, unknown> }>>(`/pages/${id}/revisions`),
   restoreRevision: (id: string, revisionId: string) =>

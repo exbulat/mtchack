@@ -4,6 +4,8 @@ import { prisma } from '../index';
 import { requireAuth } from '../middleware/requireAuth';
 
 const router = Router();
+const SPACE_ROLE_LEVEL = { OWNER: 4, ADMIN: 3, EDITOR: 2, READER: 1 } as const;
+const EMPTY_PAGE_CONTENT = { type: 'doc', content: [{ type: 'paragraph' }] } as const;
 
 function validateTitle(title: unknown): string | null {
   if (typeof title !== 'string') return null;
@@ -13,7 +15,7 @@ function validateTitle(title: unknown): string | null {
 }
 
 function validateContent(content: unknown): object | null {
-  if (content === null || content === undefined) return {};
+  if (content === null || content === undefined) return { ...EMPTY_PAGE_CONTENT };
   if (typeof content !== 'object' || Array.isArray(content)) return null;
   return content as Record<string, unknown>;
 }
@@ -23,13 +25,109 @@ function validateIcon(icon: unknown): string {
   return '';
 }
 
+type PageAccessRecord = {
+  id: string;
+  title: string;
+  icon: string;
+  ownerId: string | null;
+  spaceId: string | null;
+  deletedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  content: Prisma.JsonValue;
+};
+
+async function getSpaceRole(spaceId: string, userId: string): Promise<keyof typeof SPACE_ROLE_LEVEL | null> {
+  const membership = await prisma.spaceMember.findFirst({
+    where: { spaceId, userId },
+    select: { role: true },
+  });
+  if (membership) {
+    return membership.role;
+  }
+
+  const space = await prisma.space.findUnique({
+    where: { id: spaceId },
+    select: { ownerId: true },
+  });
+  return space?.ownerId === userId ? 'OWNER' : null;
+}
+
+async function canReadPage(page: Pick<PageAccessRecord, 'ownerId' | 'spaceId'>, userId: string): Promise<boolean> {
+  if (page.ownerId === userId) {
+    return true;
+  }
+  if (!page.spaceId) {
+    return false;
+  }
+  return (await getSpaceRole(page.spaceId, userId)) !== null;
+}
+
+async function canEditPage(page: Pick<PageAccessRecord, 'ownerId' | 'spaceId'>, userId: string): Promise<boolean> {
+  if (page.ownerId === userId) {
+    return true;
+  }
+  if (!page.spaceId) {
+    return false;
+  }
+  const role = await getSpaceRole(page.spaceId, userId);
+  return role !== null && SPACE_ROLE_LEVEL[role] >= SPACE_ROLE_LEVEL.EDITOR;
+}
+
+async function resolveLinkedPageIds(
+  sourcePage: Pick<PageAccessRecord, 'ownerId' | 'spaceId'>,
+  refs: { ids: string[]; titles: string[] }
+): Promise<string[]> {
+  const normalizedTitles = Array.from(new Set(refs.titles.map((title) => title.trim()).filter(Boolean)));
+  if (refs.ids.length === 0 && normalizedTitles.length === 0) {
+    return [];
+  }
+
+  const pages = await prisma.page.findMany({
+    where: sourcePage.spaceId
+      ? {
+          deletedAt: null,
+          spaceId: sourcePage.spaceId,
+          OR: [
+            ...(refs.ids.length > 0 ? [{ id: { in: refs.ids } }] : []),
+            ...(normalizedTitles.length > 0
+              ? [{ title: { in: normalizedTitles, mode: 'insensitive' as const } }]
+              : []),
+          ],
+        }
+      : {
+          deletedAt: null,
+          ownerId: sourcePage.ownerId ?? undefined,
+          spaceId: null,
+          OR: [
+            ...(refs.ids.length > 0 ? [{ id: { in: refs.ids } }] : []),
+            ...(normalizedTitles.length > 0
+              ? [{ title: { in: normalizedTitles, mode: 'insensitive' as const } }]
+              : []),
+          ],
+        },
+    select: { id: true, title: true },
+  });
+
+  const pageIds = new Set(pages.map((page) => page.id));
+  const titleMap = new Map(pages.map((page) => [page.title.trim().toLowerCase(), page.id]));
+
+  for (const title of normalizedTitles) {
+    const pageId = titleMap.get(title.toLowerCase());
+    if (pageId) {
+      pageIds.add(pageId);
+    }
+  }
+
+  return Array.from(pageIds);
+}
 
 router.get('/', requireAuth, async (req: Request, res: Response) => {
   try {
     const pages = await prisma.page.findMany({
-      where: { deletedAt: null, ownerId: req.authUser!.id },
+      where: { deletedAt: null, ownerId: req.authUser!.id, spaceId: null },
       orderBy: { updatedAt: 'desc' },
-      select: { id: true, title: true, icon: true, updatedAt: true },
+      select: { id: true, title: true, icon: true, updatedAt: true, spaceId: true },
     });
     res.json(pages);
   } catch {
@@ -39,10 +137,20 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 
 router.get('/meta/trash', requireAuth, async (req: Request, res: Response) => {
   try {
+    const spaceId = typeof req.query.spaceId === 'string' ? req.query.spaceId : null;
+    if (spaceId) {
+      const role = await getSpaceRole(spaceId, req.authUser!.id);
+      if (!role) {
+        return res.status(403).json({ error: 'Нет прав на просмотр корзины этого пространства' });
+      }
+    }
+
     const pages = await prisma.page.findMany({
-      where: { deletedAt: { not: null }, ownerId: req.authUser!.id },
+      where: spaceId
+        ? { deletedAt: { not: null }, spaceId }
+        : { deletedAt: { not: null }, ownerId: req.authUser!.id, spaceId: null },
       orderBy: { deletedAt: 'desc' },
-      select: { id: true, title: true, icon: true, deletedAt: true },
+      select: { id: true, title: true, icon: true, deletedAt: true, spaceId: true },
     });
     res.json(pages);
   } catch {
@@ -52,9 +160,19 @@ router.get('/meta/trash', requireAuth, async (req: Request, res: Response) => {
 
 router.get('/meta/graph', requireAuth, async (req: Request, res: Response) => {
   try {
+    const spaceId = typeof req.query.spaceId === 'string' ? req.query.spaceId : null;
+    if (spaceId) {
+      const role = await getSpaceRole(spaceId, req.authUser!.id);
+      if (!role) {
+        return res.status(403).json({ error: 'Нет прав на просмотр графа этого пространства' });
+      }
+    }
+
     const pages = await prisma.page.findMany({
-      where: { deletedAt: null, ownerId: req.authUser!.id },
-      select: { id: true, title: true, icon: true },
+      where: spaceId
+        ? { deletedAt: null, spaceId }
+        : { deletedAt: null, ownerId: req.authUser!.id, spaceId: null },
+      select: { id: true, title: true, icon: true, spaceId: true },
     });
     const pageIds = pages.map((p) => p.id);
     const links = await prisma.pageLink.findMany({
@@ -73,15 +191,25 @@ router.get('/meta/graph', requireAuth, async (req: Request, res: Response) => {
 router.get('/meta/search', requireAuth, async (req: Request, res: Response) => {
   try {
     let q = (req.query.q as string) || '';
+    const spaceId = typeof req.query.spaceId === 'string' ? req.query.spaceId : null;
     const MAX_SEARCH_LENGTH = 200;
     if (q.length > MAX_SEARCH_LENGTH) {
       q = q.substring(0, MAX_SEARCH_LENGTH);
     }
     q = q.trim();
-    
+
+    if (spaceId) {
+      const role = await getSpaceRole(spaceId, req.authUser!.id);
+      if (!role) {
+        return res.status(403).json({ error: 'Нет прав на поиск в этом пространстве' });
+      }
+    }
+
     const pages = await prisma.page.findMany({
-      where: { title: { contains: q, mode: 'insensitive' }, deletedAt: null, ownerId: req.authUser!.id },
-      select: { id: true, title: true, icon: true },
+      where: spaceId
+        ? { title: { contains: q, mode: 'insensitive' }, deletedAt: null, spaceId }
+        : { title: { contains: q, mode: 'insensitive' }, deletedAt: null, ownerId: req.authUser!.id, spaceId: null },
+      select: { id: true, title: true, icon: true, spaceId: true },
       take: 10,
     });
     res.json(pages);
@@ -114,6 +242,16 @@ router.patch('/comments/:commentId', requireAuth, async (req: Request, res: Resp
     if (!existing) {
       return res.status(404).json({ error: 'Comment not found' });
     }
+    const page = await prisma.page.findUnique({
+      where: { id: existing.pageId },
+      select: { ownerId: true, spaceId: true, deletedAt: true },
+    });
+    if (!page || page.deletedAt) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    if (!(await canReadPage(page, req.authUser!.id))) {
+      return res.status(403).json({ error: 'Нет прав на изменение комментариев этой страницы' });
+    }
     if (existing.authorId !== req.authUser!.id) {
       return res.status(403).json({ error: 'Нет прав на изменение этого комментария' });
     }
@@ -125,7 +263,7 @@ router.patch('/comments/:commentId', requireAuth, async (req: Request, res: Resp
         ...(resolved !== undefined && { resolved: Boolean(resolved) }),
       },
     });
-    res.json(updated);
+    res.json({ ...updated, authorName: req.authUser!.name });
   } catch {
     res.status(500).json({ error: 'Failed to update comment' });
   }
@@ -137,6 +275,16 @@ router.delete('/comments/:commentId', requireAuth, async (req: Request, res: Res
     const existing = await prisma.comment.findUnique({ where: { id: commentId } });
     if (!existing) {
       return res.status(404).json({ error: 'Comment not found' });
+    }
+    const page = await prisma.page.findUnique({
+      where: { id: existing.pageId },
+      select: { ownerId: true, spaceId: true, deletedAt: true },
+    });
+    if (!page || page.deletedAt) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    if (!(await canReadPage(page, req.authUser!.id))) {
+      return res.status(403).json({ error: 'Нет прав на удаление комментариев этой страницы' });
     }
     if (existing.authorId !== req.authUser!.id) {
       return res.status(403).json({ error: 'Нет прав на удаление этого комментария' });
@@ -154,12 +302,12 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
       where: { id: req.params.id!, deletedAt: null },
       include: {
         incomingLinks: {
-          include: { source: { select: { id: true, title: true, icon: true } } },
+          include: { source: { select: { id: true, title: true, icon: true, spaceId: true } } },
         },
       },
     });
     if (!page) return res.status(404).json({ error: 'Page not found' });
-    if (page.ownerId !== req.authUser!.id) {
+    if (!(await canReadPage(page, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на просмотр этой страницы' });
     }
     res.json(page);
@@ -200,7 +348,7 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
       where: { id: req.params.id!, deletedAt: null },
     });
     if (!existing) return res.status(404).json({ error: 'Page not found' });
-    if (existing.ownerId !== req.authUser!.id) {
+    if (!(await canEditPage(existing as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на редактирование этой страницы' });
     }
     if (title !== undefined) {
@@ -209,8 +357,9 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Title must be 1-500 characters' });
       }
     }
+
     const updateData: Record<string, Prisma.InputJsonValue | string> = {
-      ...(icon !== undefined && { icon: icon }),
+      ...(icon !== undefined && { icon }),
       ...(title !== undefined && { title: validateTitle(title) || 'Без названия' }),
     };
     if (content !== undefined) {
@@ -220,7 +369,7 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
       }
       updateData.content = validContent as Prisma.InputJsonValue;
     }
-    // Создаём ревизию не чаще раза в 5 минут, чтобы не засорять при autosave
+
     const REVISION_INTERVAL_MS = 5 * 60 * 1000;
     const latestRevision = await prisma.pageRevision.findFirst({
       where: { pageId: req.params.id! },
@@ -238,14 +387,14 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
           content: existing.content as Prisma.InputJsonValue,
         },
       });
-      // Удаляем старые ревизии сверх лимита 20
+
       const allRevisions = await prisma.pageRevision.findMany({
         where: { pageId: req.params.id! },
         orderBy: { createdAt: 'desc' },
         select: { id: true },
       });
       if (allRevisions.length > 20) {
-        const toDelete = allRevisions.slice(20).map((r) => r.id);
+        const toDelete = allRevisions.slice(20).map((revision) => revision.id);
         await prisma.pageRevision.deleteMany({ where: { id: { in: toDelete } } });
       }
     }
@@ -255,8 +404,8 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
       data: updateData,
     });
 
-    if (content) {
-      await syncPageLinks(req.params.id!, content);
+    if (content && typeof content === 'object' && !Array.isArray(content)) {
+      await syncPageLinks(existing as PageAccessRecord, content as Record<string, unknown>);
     }
 
     res.json(page);
@@ -273,7 +422,7 @@ router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
     if (!existing) {
       return res.status(404).json({ error: 'Page not found or already in trash' });
     }
-    if (existing.ownerId !== req.authUser!.id) {
+    if (!(await canEditPage(existing as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на удаление этой страницы' });
     }
     await prisma.page.update({
@@ -294,7 +443,7 @@ router.post('/:id/restore', requireAuth, async (req: Request, res: Response) => 
     if (!existing) {
       return res.status(404).json({ error: 'Page not found or not in trash' });
     }
-    if (existing.ownerId !== req.authUser!.id) {
+    if (!(await canEditPage(existing as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на восстановление этой страницы' });
     }
     await prisma.page.update({
@@ -313,7 +462,7 @@ router.delete('/:id/permanent', requireAuth, async (req: Request, res: Response)
     if (!existing) {
       return res.status(404).json({ error: 'Page not found' });
     }
-    if (existing.ownerId !== req.authUser!.id) {
+    if (!(await canEditPage(existing as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на удаление этой страницы' });
     }
     await prisma.page.delete({ where: { id: req.params.id! } });
@@ -327,14 +476,14 @@ router.get('/:id/backlinks', requireAuth, async (req: Request, res: Response) =>
   try {
     const page = await prisma.page.findFirst({ where: { id: req.params.id!, deletedAt: null } });
     if (!page) return res.status(404).json({ error: 'Page not found' });
-    if (page.ownerId !== req.authUser!.id) {
+    if (!(await canReadPage(page as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на просмотр этой страницы' });
     }
     const links = await prisma.pageLink.findMany({
       where: { targetId: req.params.id! },
-      include: { source: { select: { id: true, title: true, icon: true } } },
+      include: { source: { select: { id: true, title: true, icon: true, spaceId: true } } },
     });
-    res.json(links.map((l) => l.source));
+    res.json(links.map((link) => link.source));
   } catch {
     res.status(500).json({ error: 'Failed to fetch backlinks' });
   }
@@ -344,7 +493,7 @@ router.get('/:id/revisions', requireAuth, async (req: Request, res: Response) =>
   try {
     const page = await prisma.page.findFirst({ where: { id: req.params.id!, deletedAt: null } });
     if (!page) return res.status(404).json({ error: 'Page not found' });
-    if (page.ownerId !== req.authUser!.id) {
+    if (!(await canReadPage(page as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на просмотр ревизий этой страницы' });
     }
     const revisions = await prisma.pageRevision.findMany({
@@ -361,9 +510,13 @@ router.get('/:id/revisions', requireAuth, async (req: Request, res: Response) =>
 router.post('/:id/revisions/:revisionId/restore', requireAuth, async (req: Request, res: Response) => {
   try {
     const page = await prisma.page.findUnique({ where: { id: req.params.id! } });
-    if (!page || page.ownerId !== req.authUser!.id) {
+    if (!page) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    if (!(await canEditPage(page as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на восстановление ревизий этой страницы' });
     }
+
     const revision = await prisma.pageRevision.findUnique({ where: { id: req.params.revisionId! } });
     if (!revision || revision.pageId !== page.id) {
       return res.status(404).json({ error: 'Revision not found' });
@@ -381,9 +534,8 @@ router.post('/:id/revisions/:revisionId/restore', requireAuth, async (req: Reque
       data: { content: revision.content as Prisma.InputJsonValue },
     });
 
-    const revJson = revision.content;
-    if (revJson && typeof revJson === 'object' && !Array.isArray(revJson)) {
-      await syncPageLinks(page.id, revJson as Record<string, unknown>);
+    if (revision.content && typeof revision.content === 'object' && !Array.isArray(revision.content)) {
+      await syncPageLinks(page as PageAccessRecord, revision.content as Record<string, unknown>);
     }
     res.json(updated);
   } catch {
@@ -394,7 +546,10 @@ router.post('/:id/revisions/:revisionId/restore', requireAuth, async (req: Reque
 router.delete('/:id/revisions/:revisionId', requireAuth, async (req: Request, res: Response) => {
   try {
     const page = await prisma.page.findUnique({ where: { id: req.params.id! } });
-    if (!page || page.ownerId !== req.authUser!.id) {
+    if (!page) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    if (!(await canEditPage(page as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на удаление ревизий этой страницы' });
     }
     const revision = await prisma.pageRevision.findUnique({ where: { id: req.params.revisionId! } });
@@ -412,7 +567,7 @@ router.get('/:id/comments', requireAuth, async (req: Request, res: Response) => 
   try {
     const page = await prisma.page.findFirst({ where: { id: req.params.id!, deletedAt: null } });
     if (!page) return res.status(404).json({ error: 'Page not found' });
-    if (page.ownerId !== req.authUser!.id) {
+    if (!(await canReadPage(page as PageAccessRecord, req.authUser!.id))) {
       return res.status(403).json({ error: 'Нет прав на просмотр комментариев этой страницы' });
     }
     const comments = await prisma.comment.findMany({
@@ -420,16 +575,15 @@ router.get('/:id/comments', requireAuth, async (req: Request, res: Response) => 
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
-    // подцепляем имена авторов
-    const authorIds = [...new Set(comments.map((c) => c.authorId).filter(Boolean))];
+    const authorIds = [...new Set(comments.map((comment) => comment.authorId).filter(Boolean))];
     const authors = await prisma.user.findMany({
       where: { id: { in: authorIds } },
       select: { id: true, name: true },
     });
-    const nameMap = new Map(authors.map((u) => [u.id, u.name]));
-    const enriched = comments.map((c) => ({
-      ...c,
-      authorName: nameMap.get(c.authorId) || c.authorId,
+    const nameMap = new Map(authors.map((author) => [author.id, author.name]));
+    const enriched = comments.map((comment) => ({
+      ...comment,
+      authorName: nameMap.get(comment.authorId) || comment.authorId,
     }));
     res.json(enriched);
   } catch {
@@ -440,16 +594,16 @@ router.get('/:id/comments', requireAuth, async (req: Request, res: Response) => 
 router.post('/:id/comments', requireAuth, async (req: Request, res: Response) => {
   try {
     const { text, blockId } = req.body;
-    
+
     if (!text || !String(text).trim()) {
       return res.status(400).json({ error: 'Comment text is required' });
     }
-    
+
     const trimmedText = String(text).trim();
     if (trimmedText.length > 5000) {
       return res.status(400).json({ error: 'Comment text too long (max 5000 characters)' });
     }
-    
+
     let validatedBlockId = '';
     if (blockId) {
       if (typeof blockId !== 'string') {
@@ -460,7 +614,18 @@ router.post('/:id/comments', requireAuth, async (req: Request, res: Response) =>
       }
       validatedBlockId = blockId;
     }
-    
+
+    const page = await prisma.page.findFirst({
+      where: { id: req.params.id!, deletedAt: null },
+      select: { ownerId: true, spaceId: true },
+    });
+    if (!page) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    if (!(await canReadPage(page, req.authUser!.id))) {
+      return res.status(403).json({ error: 'Нет прав на комментирование этой страницы' });
+    }
+
     const comment = await prisma.comment.create({
       data: {
         pageId: req.params.id!,
@@ -475,32 +640,37 @@ router.post('/:id/comments', requireAuth, async (req: Request, res: Response) =>
   }
 });
 
-// вытаскиваем ссылки из контента и синхронизируем с базой
-async function syncPageLinks(sourceId: string, content: Record<string, unknown>): Promise<void> {
-  const targetIds = extractPageLinks(content);
+async function syncPageLinks(
+  sourcePage: Pick<PageAccessRecord, 'id' | 'ownerId' | 'spaceId'>,
+  content: Record<string, unknown>
+): Promise<void> {
+  const refs = extractPageLinks(content);
+  const targetIds = await resolveLinkedPageIds(sourcePage, refs);
 
-  await prisma.pageLink.deleteMany({ where: { sourceId } });
+  await prisma.pageLink.deleteMany({ where: { sourceId: sourcePage.id } });
 
-  if (targetIds.length > 0) {
+  const uniqueTargetIds = Array.from(new Set(targetIds)).filter((targetId) => targetId !== sourcePage.id);
+  if (uniqueTargetIds.length > 0) {
     await prisma.pageLink.createMany({
-      data: targetIds.map((targetId) => ({ sourceId, targetId })),
+      data: uniqueTargetIds.map((targetId) => ({ sourceId: sourcePage.id, targetId })),
       skipDuplicates: true,
     });
   }
 }
 
-// рекурсивно ищем pageId в JSON-дереве с защитой от бесконечной рекурсии
 interface ExtractLinksContext {
   ids: Set<string>;
+  titles: Set<string>;
   depth: number;
   maxDepth: number;
   maxResults: number;
   visited: WeakSet<object>;
 }
 
-function extractPageLinks(node: unknown): string[] {
+function extractPageLinks(node: unknown): { ids: string[]; titles: string[] } {
   const context: ExtractLinksContext = {
     ids: new Set(),
+    titles: new Set(),
     depth: 0,
     maxDepth: 100,
     maxResults: 1000,
@@ -508,7 +678,7 @@ function extractPageLinks(node: unknown): string[] {
   };
 
   extractPageLinksRecursive(node, context);
-  return Array.from(context.ids);
+  return { ids: Array.from(context.ids), titles: Array.from(context.titles) };
 }
 
 function extractPageLinksRecursive(node: unknown, context: ExtractLinksContext): void {
@@ -517,7 +687,7 @@ function extractPageLinksRecursive(node: unknown, context: ExtractLinksContext):
     return;
   }
 
-  if (context.ids.size >= context.maxResults) {
+  if (context.ids.size + context.titles.size >= context.maxResults) {
     console.warn('[Security] extractPageLinks: max results limit reached');
     return;
   }
@@ -533,7 +703,6 @@ function extractPageLinksRecursive(node: unknown, context: ExtractLinksContext):
 
   const nodeObj = node as Record<string, unknown>;
 
-  // вытаскиваем pageId из ноды pageLink
   if (nodeObj.type === 'pageLink' && typeof nodeObj.attrs === 'object' && nodeObj.attrs !== null) {
     const attrs = nodeObj.attrs as Record<string, unknown>;
     if (typeof attrs.pageId === 'string') {
@@ -541,10 +710,26 @@ function extractPageLinksRecursive(node: unknown, context: ExtractLinksContext):
     }
   }
 
+  if (Array.isArray(nodeObj.marks)) {
+    for (const mark of nodeObj.marks) {
+      if (typeof mark !== 'object' || mark === null) {
+        continue;
+      }
+      const markObj = mark as Record<string, unknown>;
+      if (markObj.type !== 'wikiLink' || typeof markObj.attrs !== 'object' || markObj.attrs === null) {
+        continue;
+      }
+      const attrs = markObj.attrs as Record<string, unknown>;
+      if (typeof attrs.title === 'string' && attrs.title.trim()) {
+        context.titles.add(attrs.title.trim());
+      }
+    }
+  }
+
   if (Array.isArray(nodeObj.content)) {
     context.depth++;
     for (const child of nodeObj.content) {
-      if (context.ids.size >= context.maxResults) break;
+      if (context.ids.size + context.titles.size >= context.maxResults) break;
       extractPageLinksRecursive(child, context);
     }
     context.depth--;
