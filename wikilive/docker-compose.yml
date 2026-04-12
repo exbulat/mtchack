@@ -3,8 +3,6 @@ services:
     container_name: postgres
     image: postgres:16-alpine
     restart: unless-stopped
-    ports:
-      - '5432:5432'
     environment:
       # задайте POSTGRES_PASSWORD в .env перед запуском
       POSTGRES_USER: ${POSTGRES_USER:-wikilive}
