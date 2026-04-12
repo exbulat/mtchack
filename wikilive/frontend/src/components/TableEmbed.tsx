@@ -110,8 +110,7 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
     if (filterText.trim()) {
       const lower = filterText.toLowerCase();
       result = result.filter((r) =>
-        Object.values(r.fields || {}).some((v) =>
-          mwsCellDisplayValue(v).toLowerCase().includes(lower)
+        Object.values(r.fields || {}).some((v) => mwsCellDisplayValue(v).toLowerCase().includes(lower)
         )
       );
     }
