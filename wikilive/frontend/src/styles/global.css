@@ -438,22 +438,41 @@ strong { color: var(--text); font-weight: 600; }
   flex-shrink: 0;
 }
 
-.toolbar-group { display: inline-flex; align-items: center; gap: 4px; }
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-right: 1px solid var(--border);
+}
+.toolbar-group:last-child {
+  border-right: none;
+}
 
 .toolbar-btn {
   min-width: 28px;
   height: 28px;
-  border-radius: var(--radius);
-  padding: 0 8px;
-  font-size: 12px;
+  border-radius: 4px;
+  font-size: 13px;
   font-weight: 600;
+  padding: 0 6px;
   color: var(--text-secondary);
-  border: 1px solid var(--border);
-  background: var(--bg);
-  transition: all 0.12s;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.toolbar-btn:hover { background: var(--accent-dim); color: var(--text); border-color: var(--border-light); }
-.toolbar-btn:active { transform: translateY(1px); }
+.toolbar-btn:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.toolbar-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
 
 .toolbar-right { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; }
 
@@ -588,6 +607,13 @@ strong { color: var(--text); font-weight: 600; }
   text-underline-offset: 2px;
 }
 .tiptap a.tiptap-link:hover { opacity: 0.7; }
+.tiptap-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius);
+  margin: 8px 0;
+  display: block;
+}
 
 /* ── Collaboration cursors ── */
 .collaboration-cursor__caret {

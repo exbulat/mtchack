@@ -268,4 +268,20 @@ export const api = {
 
   deleteSpace: (spaceId: string) =>
     request<{ ok: boolean }>(`/spaces/${spaceId}`, { method: 'DELETE' }),
+
+  uploadImage: async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append('image', file);
+    const res = await fetch(`${API_BASE}/files/upload`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = (await res.json()) as { url: string };
+    return data.url;
+  },
 };

@@ -71,6 +71,38 @@ const MwsTableExtension = Node.create({
   },
 });
 
+const Image = Node.create({
+  name: 'image',
+  group: 'block',
+  atom: true,
+  draggable: true,
+  selectable: true,
+  addOptions() {
+    return {
+      inline: false,
+      allowBase64: false,
+      HTMLAttributes: {} as Record<string, string>,
+    };
+  },
+  addAttributes() {
+    return {
+      src: { default: null },
+      alt: { default: null },
+      title: { default: null },
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: this.options.allowBase64 ? 'img[src]' : 'img[src]:not([src^="data:"])',
+      },
+    ];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['img', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)];
+  },
+});
+
 // убираем / перед курсором
 function consumeSlashBeforeCursor(editor: TiptapEditor) {
   const { from } = editor.state.selection;
@@ -178,6 +210,11 @@ export default function Editor({
       starter,
       Underline,
       link,
+      Image.configure({
+        inline: false,
+        allowBase64: false,
+        HTMLAttributes: { class: 'tiptap-image' },
+      }),
       table,
       TableRow,
       TableHeader,
@@ -248,8 +285,19 @@ export default function Editor({
         const a = el.closest('a');
         if (!a || !editor.view.dom.contains(a)) return false;
         event.preventDefault();
-        editor.chain().focus().setTextSelection(pos).extendMarkRange('link').run();
-        setTimeout(() => onRequestLinkEdit?.(), 0);
+        if (event.ctrlKey || event.metaKey || event.detail >= 2) {
+          editor.chain().focus().setTextSelection(pos).extendMarkRange('link').run();
+          setTimeout(() => onRequestLinkEdit?.(), 0);
+          return true;
+        }
+        const href = a.getAttribute('href');
+        if (href) {
+          if (href.startsWith('/')) {
+            window.location.href = href;
+          } else {
+            window.open(href, '_blank', 'noopener,noreferrer');
+          }
+        }
         return true;
       },
       handleKeyDown: (_view, event) => {
@@ -333,6 +381,28 @@ export default function Editor({
           break;
         case 'divider':
           editor.chain().focus().setHorizontalRule().run();
+          break;
+        case 'image':
+          {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/jpeg,image/png,image/gif';
+            input.onchange = async () => {
+              const file = input.files?.[0];
+              if (!file) return;
+              if (file.size > 5 * 1024 * 1024) {
+                alert('Файл слишком большой. Максимум 5 МБ.');
+                return;
+              }
+              try {
+                const url = await api.uploadImage(file);
+                editor.chain().focus().insertContent({ type: 'image', attrs: { src: url } }).run();
+              } catch {
+                alert('Не удалось загрузить изображение');
+              }
+            };
+            input.click();
+          }
           break;
         case 'ai':
           onInsertAiBlock?.();
@@ -476,9 +546,25 @@ export default function Editor({
           <button
             className="bubble-btn"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleCode().run()}
+            onClick={() => editor.chain().focus().toggleStrike().run()}
+            style={{ textDecoration: 'line-through' }}
           >
-            {'</>'}
+            S
+          </button>
+          <button className="bubble-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => void 0}>
+            T
+          </button>
+          <button className="bubble-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => void 0}>
+            L
+          </button>
+          <button className="bubble-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => void 0}>
+            C
+          </button>
+          <button className="bubble-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => void 0}>
+            R
+          </button>
+          <button className="bubble-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => void 0}>
+            1.5
           </button>
           <button
             className="bubble-btn"
@@ -487,6 +573,20 @@ export default function Editor({
             title="Ссылка"
           >
             @
+          </button>
+          <button
+            className="bubble-btn"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => editor.chain().focus().toggleCode().run()}
+          >
+            {'</>'}
+          </button>
+          <button
+            className="bubble-btn"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => editor.chain().focus().toggleBlockquote().run()}
+          >
+            ""
           </button>
         </div>
       )}
