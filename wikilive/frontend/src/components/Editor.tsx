@@ -1,4 +1,4 @@
-import { useEditor, EditorContent, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
+import { useEditor, EditorContent, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -9,14 +9,14 @@ import TableHeader from '@tiptap/extension-table-header';
 import Link from '@tiptap/extension-link';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
-import { Node, mergeAttributes, type Editor as TiptapEditor } from '@tiptap/core';
+import { Node, mergeAttributes, type Editor as TiptapEditor, type JSONContent } from '@tiptap/core';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import * as Y from 'yjs';
 import SlashMenu, { SLASH_ITEMS, SlashItem } from './SlashMenu';
 import TableEmbed from './TableEmbed';
 
-function MwsTableNodeView(props: any) {
+function MwsTableNodeView(props: NodeViewProps) {
   const dstId = props.node.attrs.dstId as string;
   const title = (props.node.attrs.title as string) || '';
   return (
@@ -26,7 +26,7 @@ function MwsTableNodeView(props: any) {
   );
 }
 
-// встраиваемая mws-таблица как отдельный блок документа (react node view)
+// встраиваемая mws-таблица как отдельный блок документа
 const MwsTableExtension = Node.create({
   name: 'mwsTable',
   group: 'block',
@@ -68,7 +68,7 @@ const MwsTableExtension = Node.create({
   },
 });
 
-// Удаляем символ /, который открыл slash-меню
+// убираем / перед курсором
 function consumeSlashBeforeCursor(editor: TiptapEditor) {
   const { from } = editor.state.selection;
   if (from < 1) return;
@@ -86,12 +86,12 @@ export interface EditorCollab {
 }
 
 interface EditorProps {
-  content: any;
-  onUpdate: (json: any) => void;
+  content: JSONContent;
+  onUpdate: (json: JSONContent) => void;
   onSave?: () => void;
   onInsertMwsTable?: () => void;
   onInsertAiBlock?: () => void;
-  onEditorReady?: (editor: any | null) => void;
+  onEditorReady?: (editor: TiptapEditor | null) => void;
   onRequestLinkEdit?: () => void;
   collab?: EditorCollab | null;
   collabUser?: { name: string; color: string };
@@ -242,7 +242,8 @@ export default function Editor({
           }
           if (event.key === 'Enter') {
             event.preventDefault();
-            runSlashAction(SLASH_ITEMS[selectedIndex]);
+            const item = SLASH_ITEMS[selectedIndex];
+            if (item) runSlashAction(item);
             return true;
           }
           if (event.key === 'Escape') {

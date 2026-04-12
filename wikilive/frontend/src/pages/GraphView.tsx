@@ -19,16 +19,22 @@ export default function GraphView() {
         const width = ref.current.clientWidth || 800;
         const height = ref.current.clientHeight || 600;
 
+        type GraphNode = { id: string; title: string; icon: string } & d3.SimulationNodeDatum;
+        type GraphLink = d3.SimulationLinkDatum<GraphNode>;
+
+        const simNodes: GraphNode[] = data.nodes.map((n) => ({ ...n }));
+        const simLinks: GraphLink[] = data.edges.map((e) => ({ source: e.source, target: e.target }));
+
         const simulation = d3
-          .forceSimulation(data.nodes as any)
-          .force('link', d3.forceLink(data.edges as any).id((d: any) => d.id).distance(90))
+          .forceSimulation<GraphNode>(simNodes)
+          .force('link', d3.forceLink<GraphNode, GraphLink>(simLinks).id((d) => d.id).distance(90))
           .force('charge', d3.forceManyBody().strength(-250))
           .force('center', d3.forceCenter(width / 2, height / 2));
 
         const links = svg
           .append('g')
           .selectAll('line')
-          .data(data.edges)
+          .data(simLinks)
           .join('line')
           .attr('stroke', '#cfcfd4')
           .attr('stroke-width', 1.2);
@@ -36,7 +42,7 @@ export default function GraphView() {
         const nodes = svg
           .append('g')
           .selectAll('circle')
-          .data(data.nodes)
+          .data(simNodes)
           .join('circle')
           .attr('r', 10)
           .attr('fill', '#2563eb');
@@ -44,9 +50,9 @@ export default function GraphView() {
         const labels = svg
           .append('g')
           .selectAll('text')
-          .data(data.nodes)
+          .data(simNodes)
           .join('text')
-          .text((d: any) => d.title)
+          .text((d) => d.title)
           .attr('font-size', 11)
           .attr('dx', 12)
           .attr('dy', 4)
@@ -54,15 +60,14 @@ export default function GraphView() {
 
         simulation.on('tick', () => {
           links
-            .attr('x1', (d: any) => d.source.x)
-            .attr('y1', (d: any) => d.source.y)
-            .attr('x2', (d: any) => d.target.x)
-            .attr('y2', (d: any) => d.target.y);
-          nodes.attr('cx', (d: any) => d.x).attr('cy', (d: any) => d.y);
-          labels.attr('x', (d: any) => d.x).attr('y', (d: any) => d.y);
+            .attr('x1', (d) => (d.source as GraphNode).x ?? 0)
+            .attr('y1', (d) => (d.source as GraphNode).y ?? 0)
+            .attr('x2', (d) => (d.target as GraphNode).x ?? 0)
+            .attr('y2', (d) => (d.target as GraphNode).y ?? 0);
+          nodes.attr('cx', (d) => d.x ?? 0).attr('cy', (d) => d.y ?? 0);
+          labels.attr('x', (d) => d.x ?? 0).attr('y', (d) => d.y ?? 0);
         });
       } catch {
-        // noop
       }
     }
 
