@@ -31,6 +31,14 @@ const WS_PORT = parseInt(process.env.WS_PORT || '3002', 10);
 // доверяем первому прокси (nginx в docker-compose)
 app.set('trust proxy', 1);
 
+const wsOrigins: string[] = [`ws://localhost:${WS_PORT}`];
+const allowedOrigin = process.env.ALLOWED_ORIGIN || '';
+if (allowedOrigin.startsWith('https://')) {
+  wsOrigins.push(`wss://${allowedOrigin.replace(/^https:\/\//, '')}`);
+} else if (allowedOrigin.startsWith('http://')) {
+  wsOrigins.push(`ws://${allowedOrigin.replace(/^http:\/\//, '')}`);
+}
+
 app.use(helmet());
 app.use(
   helmet.contentSecurityPolicy({
@@ -39,7 +47,7 @@ app.use(
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'", `ws://localhost:${WS_PORT}`, `ws://${process.env.ALLOWED_ORIGIN?.replace(/^https?:\/\//, '') ?? 'localhost:3002'}`],
+      connectSrc: ["'self'", ...wsOrigins],
       frameAncestors: ["'none'"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
@@ -123,7 +131,13 @@ const hocuspocus = HocuspocusServer.configure({
             select: { role: true },
           });
           if (!member) {
-            throw new Error('Forbidden: not a space member');
+            const space = await prisma.space.findFirst({
+              where: { id: page.spaceId, deletedAt: null },
+              select: { ownerId: true },
+            });
+            if (!space || space.ownerId !== user.id) {
+              throw new Error('Forbidden: not a space member');
+            }
           }
         } else {
           // Страница без пространства — только владелец

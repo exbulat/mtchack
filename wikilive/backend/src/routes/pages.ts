@@ -46,11 +46,14 @@ async function getSpaceRole(spaceId: string, userId: string): Promise<keyof type
     return membership.role;
   }
 
-  const space = await prisma.space.findUnique({
-    where: { id: spaceId },
+  const space = await prisma.space.findFirst({
+    where: { id: spaceId, deletedAt: null },
     select: { ownerId: true },
   });
-  return space?.ownerId === userId ? 'OWNER' : null;
+  if (space && space.ownerId === userId) {
+    return 'OWNER';
+  }
+  return null;
 }
 
 async function canReadPage(page: Pick<PageAccessRecord, 'ownerId' | 'spaceId'>, userId: string): Promise<boolean> {
@@ -308,6 +311,12 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
     });
     if (!page) return res.status(404).json({ error: 'Page not found' });
     if (!(await canReadPage(page, req.authUser!.id))) {
+      console.warn('[403] page read denied', {
+        pageId: req.params.id,
+        userId: req.authUser!.id,
+        pageOwnerId: page.ownerId,
+        pageSpaceId: page.spaceId,
+      });
       return res.status(403).json({ error: 'Нет прав на просмотр этой страницы' });
     }
     res.json(page);

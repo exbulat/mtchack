@@ -94,9 +94,13 @@ router.get('/:spaceId/members', loadSpaceMember, requireSpaceMember, async (req:
   try {
     const spaceId = req.params.spaceId!;
     const space = await prisma.space.findUnique({ where: { id: spaceId }, include: { members: { include: { user: true } } } });
-    if (!space) return res.status(404).json({ error: 'Space not found' });
+    if (!space) {
+      console.warn('[404] space members not found', { spaceId, userId: req.authUser!.id });
+      return res.status(404).json({ error: 'Space not found' });
+    }
     res.json(space.members);
-  } catch {
+  } catch (e) {
+    console.error('[GET /:spaceId/members]', e);
     res.status(500).json({ error: 'Failed to fetch space members' });
   }
 });
