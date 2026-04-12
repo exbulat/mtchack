@@ -17,11 +17,6 @@ const ROLE_LABELS: Record<string, string> = {
   READER: 'Читатель',
 };
 
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('ru-RU', {
-    day: 'numeric', month: 'long', year: 'numeric',
-  });
-}
 
 export default function Settings() {
   const { user, refresh, logout } = useAuth();

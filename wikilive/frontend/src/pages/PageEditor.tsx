@@ -135,7 +135,7 @@ export default function PageEditor() {
       try {
         await api.updatePage(pageId, { title });
         bumpPagesList();
-      } catch { }
+      } catch { /* ignore */ }
     }, 500);
     return () => {
       if (titleDebounceRef.current) window.clearTimeout(titleDebounceRef.current);
@@ -186,7 +186,7 @@ export default function PageEditor() {
     try {
       await api.updatePage(pageId, { title });
       bumpPagesList();
-    } catch { }
+    } catch { /* ignore */ }
   };
 
   const ensurePageForBlocks = async () => {
@@ -251,7 +251,7 @@ export default function PageEditor() {
         }));
       }
       setAiPrompt('');
-    } catch {} finally {
+    } catch { /* ignore */ } finally {
       setAiLoading(false);
     }
   };

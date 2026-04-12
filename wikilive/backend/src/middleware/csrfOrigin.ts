@@ -23,8 +23,7 @@ export function csrfOriginCheck(req: Request, res: Response, next: NextFunction)
       const url = new URL(referer);
       const refererOrigin = `${url.protocol}//${url.host}`;
       if (ALLOWED_ORIGINS.includes(refererOrigin)) return next();
-    } catch {
-    }
+    } catch { /* ignore invalid URL */ }
     res.status(403).json({ error: 'CSRF: invalid Referer' });
     return;
   }

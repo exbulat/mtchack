@@ -67,8 +67,7 @@ export default function GraphView() {
           nodes.attr('cx', (d) => d.x ?? 0).attr('cy', (d) => d.y ?? 0);
           labels.attr('x', (d) => d.x ?? 0).attr('y', (d) => d.y ?? 0);
         });
-      } catch {
-      }
+      } catch { /* ignore */ }
     }
 
     renderGraph();

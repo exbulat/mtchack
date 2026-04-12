@@ -87,8 +87,7 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
             : r
         )
       );
-    } catch {
-    }
+    } catch { /* ignore */ }
   };
 
   if (loading) {

@@ -5,7 +5,6 @@ import { requireAuth } from '../middleware/requireAuth';
 import { loadSpaceMember, requireSpaceMember, requireSpaceRole } from '../middleware/spaceAuth';
 import {
   validateSpaceName,
-  validateUserId,
   validateSpaceRole,
   validateFileTitle,
   validateJsonContent,
