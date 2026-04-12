@@ -103,12 +103,32 @@ const hocuspocus = HocuspocusServer.configure({
     if (!user) {
       throw new Error('Unauthorized');
     }
-    // проверяем что страница принадлежит пользователю
+    // Проверяем что страница существует и пользователь имеет доступ:
+    // владелец или член пространства, в котором находится страница
     const pageId = documentName;
     if (pageId) {
-      const page = await prisma.page.findUnique({ where: { id: pageId }, select: { ownerId: true } });
-      if (!page || page.ownerId !== user.id) {
-        throw new Error('Forbidden: not your page');
+      const page = await prisma.page.findUnique({
+        where: { id: pageId },
+        select: { ownerId: true, spaceId: true },
+      });
+      if (!page) {
+        throw new Error('Forbidden: page not found');
+      }
+      // Владелец всегда имеет доступ
+      if (page.ownerId !== user.id) {
+        // Для страниц в пространстве — проверяем членство
+        if (page.spaceId) {
+          const member = await prisma.spaceMember.findFirst({
+            where: { spaceId: page.spaceId, userId: user.id },
+            select: { role: true },
+          });
+          if (!member) {
+            throw new Error('Forbidden: not a space member');
+          }
+        } else {
+          // Страница без пространства — только владелец
+          throw new Error('Forbidden: not the page owner');
+        }
       }
     }
     connection.isAuthenticated = true;

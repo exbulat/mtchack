@@ -220,12 +220,35 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
       }
       updateData.content = validContent as Prisma.InputJsonValue;
     }
-    await prisma.pageRevision.create({
-      data: {
-        pageId: req.params.id!,
-        content: existing.content as Prisma.InputJsonValue,
-      },
+    // Создаём ревизию не чаще раза в 5 минут, чтобы не засорять при autosave
+    const REVISION_INTERVAL_MS = 5 * 60 * 1000;
+    const latestRevision = await prisma.pageRevision.findFirst({
+      where: { pageId: req.params.id! },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
     });
+    const shouldCreateRevision =
+      !latestRevision ||
+      Date.now() - latestRevision.createdAt.getTime() > REVISION_INTERVAL_MS;
+
+    if (shouldCreateRevision) {
+      await prisma.pageRevision.create({
+        data: {
+          pageId: req.params.id!,
+          content: existing.content as Prisma.InputJsonValue,
+        },
+      });
+      // Удаляем старые ревизии сверх лимита 20
+      const allRevisions = await prisma.pageRevision.findMany({
+        where: { pageId: req.params.id! },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (allRevisions.length > 20) {
+        const toDelete = allRevisions.slice(20).map((r) => r.id);
+        await prisma.pageRevision.deleteMany({ where: { id: { in: toDelete } } });
+      }
+    }
 
     const page = await prisma.page.update({
       where: { id: req.params.id! },

@@ -13,8 +13,11 @@ import { Node, mergeAttributes, type Editor as TiptapEditor, type JSONContent } 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import * as Y from 'yjs';
+import { useNavigate } from 'react-router-dom';
 import SlashMenu, { SLASH_ITEMS, SlashItem } from './SlashMenu';
 import TableEmbed from './TableEmbed';
+import { WikiLink } from '../extensions/WikiLink';
+import { api } from '../lib/api';
 
 function MwsTableNodeView(props: NodeViewProps) {
   const dstId = props.node.attrs.dstId as string;
@@ -108,6 +111,7 @@ export default function Editor({
   collab,
   collabUser,
 }: EditorProps) {
+  const navigate = useNavigate();
   const contentRef = useRef(content);
   contentRef.current = content;
 
@@ -124,6 +128,23 @@ export default function Editor({
   const useCollab = Boolean(collab?.ydoc && collab?.provider && collabUser);
   const collabUserName = collabUser?.name;
   const collabUserColor = collabUser?.color;
+
+  const handleWikiNavigate = useCallback(
+    async (title: string) => {
+      try {
+        const results = await api.searchPages(title);
+        if (results.length > 0 && results[0]) {
+          navigate(`/page/${results[0].id}`);
+        } else {
+          // Page doesn't exist — navigate to new page with pre-filled title
+          navigate(`/new?title=${encodeURIComponent(title)}`);
+        }
+      } catch {
+        navigate(`/new?title=${encodeURIComponent(title)}`);
+      }
+    },
+    [navigate]
+  );
 
   const extensions = useMemo(() => {
     const starter = useCollab
@@ -165,9 +186,13 @@ export default function Editor({
         placeholder: 'Начните писать или нажмите / для меню блоков...',
       }),
       MwsTableExtension,
+      WikiLink.configure({
+        onNavigate: handleWikiNavigate,
+        HTMLAttributes: {},
+      }),
       ...collabExts,
     ];
-  }, [useCollab, collab, collabUserName, collabUserColor]);
+  }, [useCollab, collab, collabUserName, collabUserColor, handleWikiNavigate]);
 
   const editor = useEditor({
     extensions,
@@ -230,26 +255,10 @@ export default function Editor({
       handleKeyDown: (_view, event) => {
         if (!editor) return false;
         if (showSlash) {
-          if (event.key === 'ArrowDown') {
-            event.preventDefault();
-            setSelectedIndex((prev) => (prev + 1) % SLASH_ITEMS.length);
-            return true;
-          }
-          if (event.key === 'ArrowUp') {
-            event.preventDefault();
-            setSelectedIndex((prev) => (prev - 1 + SLASH_ITEMS.length) % SLASH_ITEMS.length);
-            return true;
-          }
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            const item = SLASH_ITEMS[selectedIndex];
-            if (item) runSlashAction(item);
-            return true;
-          }
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            setShowSlash(false);
-            return true;
+          // Navigation handled by SlashMenu's own input — just block Enter/Esc from going to editor
+          if (event.key === 'Enter' || event.key === 'Escape' ||
+              event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            return true; // swallow — SlashMenu handles these
           }
         }
 
@@ -289,20 +298,17 @@ export default function Editor({
     (item: SlashItem) => {
       if (!editor) return;
       if (item.id === 'simpleTable') {
-        consumeSlashBeforeCursor(editor);
         setShowSlash(false);
         setGridHover({ rows: 2, cols: 2 });
         setTablePicker({ x: slashPos.x, y: slashPos.y });
         return;
       }
       if (item.id === 'mwsTable') {
-        consumeSlashBeforeCursor(editor);
         setShowSlash(false);
         onInsertMwsTable?.();
         return;
       }
 
-      consumeSlashBeforeCursor(editor);
       switch (item.id) {
         case 'h1':
           editor.chain().focus().toggleHeading({ level: 1 }).run();
@@ -490,7 +496,12 @@ export default function Editor({
           x={slashPos.x}
           y={slashPos.y}
           selectedIndex={selectedIndex}
-          onSelect={runSlashAction}
+          onSelect={(item) => {
+            consumeSlashBeforeCursor(editor);
+            runSlashAction(item);
+          }}
+          onClose={() => setShowSlash(false)}
+          onIndexChange={setSelectedIndex}
         />
       )}
       {tablePicker && (

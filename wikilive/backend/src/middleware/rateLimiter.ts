@@ -55,8 +55,8 @@ export const tablesLimiter = rateLimit({
 
 export const writeLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
-  message: 'Too many write operations. Maximum 300 per 15 minutes.',
+  max: 2000,
+  message: 'Too many write operations. Maximum 2000 per 15 minutes.',
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req: Request) => {

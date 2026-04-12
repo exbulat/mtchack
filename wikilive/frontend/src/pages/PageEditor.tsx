@@ -67,6 +67,8 @@ export default function PageEditor() {
       name: pageId,
       document: ydoc,
       awareness,
+      // Auth happens via HttpOnly cookie — token field just silences the client warning
+      token: 'cookie',
     });
     setCollab({ ydoc, provider });
     return () => {
@@ -76,10 +78,11 @@ export default function PageEditor() {
     };
   }, [pageId, user?.id]);
 
-  const { isSaving, lastSavedAt, saveError, saveNow } = useAutosave({
+  const { isSaving, lastSavedAt, saveError, saveNow, pendingChanges } = useAutosave({
     pageId,
     title,
     content,
+    enabled: !loading,
   });
 
   useEffect(() => {
@@ -503,7 +506,7 @@ export default function PageEditor() {
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Краткое описание (необязательно)"
             />
-            <SaveStatus isSaving={isSaving} lastSavedAt={lastSavedAt} error={saveError} />
+            <SaveStatus isSaving={isSaving} lastSavedAt={lastSavedAt} error={saveError} pendingChanges={pendingChanges} />
             <Editor
               key={pageId ? `${pageId}-${collab ? 'y' : 'n'}` : 'draft'}
               content={content}
