@@ -7,11 +7,12 @@ import type { Editor as TiptapEditor, JSONContent } from '@tiptap/core';
 import Backlinks from '../components/Backlinks';
 import Editor from '../components/Editor';
 import SaveStatus from '../components/SaveStatus';
-import { api, PageComment } from '../lib/api';
+import { api } from '../lib/api';
 import { useAutosave } from '../hooks/useAutosave';
 import { PagesListContext } from '../components/RightSidebar';
 import { useAuth } from '../context/AuthContext';
 import type { EditorCollab } from '../components/Editor';
+import FloatingComments, { FloatingPanel } from '../components/FloatingComments';
 
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
 const LAST_SPACE_PAGE_KEY_PREFIX = 'wikilive-last-space-page:';
@@ -51,13 +52,12 @@ export default function PageEditor() {
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiMode, setAiMode] = useState<'page' | 'search'>('page');
+  const [aiResult, setAiResult] = useState('');
   const [description, setDescription] = useState('');
-  const [rightMode, setRightMode] = useState<'comments' | 'timeline' | 'info' | null>('timeline');
+  const [showComments, setShowComments] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [revisions, setRevisions] = useState<Array<{ id: string; pageId: string; createdAt: string; content: JSONContent }>>([]);
-  const [comments, setComments] = useState<PageComment[]>([]);
-  const [commentDraft, setCommentDraft] = useState('');
-  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
-  const [editingText, setEditingText] = useState('');
   const [editorInstance, setEditorInstance] = useState<TiptapEditor | null>(null);
   const [pageMeta, setPageMeta] = useState<{ createdAt?: string; updatedAt?: string }>({});
   const [linkPopover, setLinkPopover] = useState<{
@@ -174,7 +174,7 @@ export default function PageEditor() {
   }, [pageId, title, bumpPagesList]);
 
   useEffect(() => {
-    if (!pageId || rightMode !== 'timeline') {
+    if (!pageId || !showTimeline) {
       setRevisions([]);
       return;
     }
@@ -190,26 +190,8 @@ export default function PageEditor() {
     return () => {
       mounted = false;
     };
-  }, [pageId, rightMode]);
+  }, [pageId, showTimeline]);
 
-  useEffect(() => {
-    if (!pageId || rightMode !== 'comments') {
-      setComments([]);
-      return;
-    }
-    let mounted = true;
-    api
-      .listComments(pageId)
-      .then((data) => {
-        if (mounted) setComments(data);
-      })
-      .catch(() => {
-        if (mounted) setComments([]);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [pageId, rightMode]);
 
   const onTitleBlur = async () => {
     if (!pageId) return;
@@ -267,23 +249,44 @@ export default function PageEditor() {
   const runAi = async () => {
     if (!aiPrompt.trim()) return;
     setAiLoading(true);
+    setAiResult('');
     try {
-      const text = extractText(content);
-      const scopedContext = `Файл: ${title}\nОписание: ${description || '-'}\nТекст файла:\n${text}`;
-      const res = await api.aiChat(aiPrompt, scopedContext);
-      if (!res.reply) return;
-      if (editorInstance) {
-        editorInstance.chain().focus().insertContent(res.reply).run();
+      let contextForAi = '';
+      if (aiMode === 'search') {
+        try {
+          const found = await api.searchPages(aiPrompt, spaceId ?? null);
+          const pages = await Promise.all(
+            found.slice(0, 3).map((p) => api.getPage(p.id).catch(() => null))
+          );
+          contextForAi = pages
+            .filter(Boolean)
+            .map((p) => `=== ${p!.title} ===\n${extractText(p!.content as JSONContent)}`)
+            .join('\n\n');
+        } catch { /* ignore, use empty context */ }
       } else {
-        setContent((prev: JSONContent) => ({
-          ...prev,
-          content: [
-            ...(prev.content || []),
-            { type: 'paragraph', content: [{ type: 'text', text: res.reply }] },
-          ],
-        }));
+        const text = extractText(content);
+        contextForAi = `Файл: ${title}\nОписание: ${description || '-'}\nТекст файла:\n${text}`;
       }
-      setAiPrompt('');
+
+      const res = await api.aiChat(aiPrompt, contextForAi);
+      if (!res.reply) return;
+
+      if (aiMode === 'search') {
+        setAiResult(res.reply);
+      } else {
+        if (editorInstance) {
+          editorInstance.chain().focus().insertContent(res.reply).run();
+        } else {
+          setContent((prev: JSONContent) => ({
+            ...prev,
+            content: [
+              ...(prev.content || []),
+              { type: 'paragraph', content: [{ type: 'text', text: res.reply }] },
+            ],
+          }));
+        }
+        setAiPrompt('');
+      }
     } catch { /* ignore */ } finally {
       setAiLoading(false);
     }
@@ -400,35 +403,6 @@ export default function PageEditor() {
     }
   };
 
-  const addComment = async () => {
-    const text = commentDraft.trim();
-    if (!text) return;
-    const targetPageId = await ensurePageForBlocks();
-    const created = await api.createComment(targetPageId, { text });
-    setComments((prev) => [created, ...prev]);
-    setCommentDraft('');
-  };
-
-  const startEditComment = (comment: PageComment) => {
-    setEditingCommentId(comment.id);
-    setEditingText(comment.text);
-  };
-
-  const saveEditComment = async () => {
-    if (!editingCommentId) return;
-    const text = editingText.trim();
-    if (!text) return;
-    const updated = await api.updateComment(editingCommentId, { text });
-    setComments((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-    setEditingCommentId(null);
-    setEditingText('');
-  };
-
-  const removeComment = async (commentId: string) => {
-    await api.deleteComment(commentId);
-    setComments((prev) => prev.filter((item) => item.id !== commentId));
-  };
-
   const restoreRevision = async (revisionId: string) => {
     if (!pageId) return;
     const updatedPage = await api.restoreRevision(pageId, revisionId);
@@ -500,22 +474,16 @@ export default function PageEditor() {
         </div>
         <div className="toolbar-right">
           <button
-            className={`toolbar-link${rightMode === 'comments' ? ' active' : ''}`}
-            onClick={() => setRightMode((prev) => (prev === 'comments' ? null : 'comments'))}
+            className={`toolbar-link${showComments ? ' active' : ''}`}
+            onClick={() => setShowComments((v) => !v)}
           >
             Комментарии
           </button>
           <button
-            className={`toolbar-link${rightMode === 'timeline' ? ' active' : ''}`}
-            onClick={() => setRightMode((prev) => (prev === 'timeline' ? null : 'timeline'))}
+            className={`toolbar-link${showTimeline ? ' active' : ''}`}
+            onClick={() => setShowTimeline((v) => !v)}
           >
             Машина времени
-          </button>
-          <button
-            className={`toolbar-link${rightMode === 'info' ? ' active' : ''}`}
-            onClick={() => setRightMode((prev) => (prev === 'info' ? null : 'info'))}
-          >
-            Описание файла
           </button>
         </div>
       </div>
@@ -555,147 +523,48 @@ export default function PageEditor() {
           </div>
         </section>
 
-        {rightMode && (
-          <aside className="right-panel">
-            <div className="right-panel-header">
-              <h3>
-                {rightMode === 'comments'
-                  ? 'История комментариев'
-                  : rightMode === 'timeline'
-                    ? 'Машина времени'
-                    : 'Описание файла'}
-              </h3>
-              <button className="toolbar-btn" onClick={() => setRightMode(null)}>
-                ×
-              </button>
-            </div>
-            {rightMode === 'comments' ? (
-              <div className="comment-history">
-                <div className="comment-composer">
-                  <textarea
-                    className="comment-input"
-                    value={commentDraft}
-                    onChange={(e) => setCommentDraft(e.target.value)}
-                    placeholder="оставить комментарий"
-                  />
-                  <button className="btn btn-primary" onClick={addComment}>
-                    Добавить
+      </div>
+
+      {/* ── Floating: Комментарии (карточки) ── */}
+      {pageId && (
+        <FloatingComments
+          pageId={pageId}
+          currentUserId={user?.id}
+          visible={showComments}
+          onClose={() => setShowComments(false)}
+        />
+      )}
+
+      {/* ── Floating: Машина времени ── */}
+      {showTimeline && (
+        <FloatingPanel
+          title="Машина времени"
+          initialPos={{ x: Math.max(20, window.innerWidth - 400), y: 80 }}
+          onClose={() => setShowTimeline(false)}
+        >
+          <div className="timeline-list">
+            {revisions.length === 0 && (
+              <div className="timeline-empty">Пока нет ревизий</div>
+            )}
+            {revisions.map((rev) => (
+              <div key={rev.id} className="timeline-item">
+                <div className="timeline-title">Версия</div>
+                <div className="timeline-time">
+                  {new Date(rev.createdAt).toLocaleString('ru-RU')}
+                </div>
+                <div className="timeline-actions">
+                  <button className="comment-thread-link" onClick={() => restoreRevision(rev.id)}>
+                    Восстановить
+                  </button>
+                  <button className="comment-thread-link" onClick={() => removeRevision(rev.id)}>
+                    Удалить
                   </button>
                 </div>
-                {comments.map((comment) => (
-                  <div key={comment.id} className="comment-card">
-                    <div className="comment-topline">
-                      <div className="comment-user">
-                        <span className="comment-avatar">{(comment.authorName || 'В')[0]}</span>
-                        <div>
-                          <div className="comment-author">{comment.authorName || 'Вы'}</div>
-                          <div className="comment-time">
-                            {new Date(comment.createdAt).toLocaleString('ru-RU')}
-                          </div>
-                        </div>
-                      </div>
-                      <span className="comment-badge">{comment.resolved ? 'решено' : 'активно'}</span>
-                    </div>
-                    {editingCommentId === comment.id ? (
-                      <div className="comment-editing">
-                        <textarea
-                          className="comment-input"
-                          value={editingText}
-                          onChange={(e) => setEditingText(e.target.value)}
-                        />
-                        <div className="comment-actions-row">
-                          <button className="comment-thread-link" onClick={saveEditComment}>
-                            Сохранить
-                          </button>
-                          <button className="comment-thread-link" onClick={() => setEditingCommentId(null)}>
-                            Отмена
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="comment-text">{comment.text}</div>
-                        <div className="comment-actions-row">
-                          <button className="comment-thread-link" onClick={() => startEditComment(comment)}>
-                            Редактировать
-                          </button>
-                          <button className="comment-thread-link" onClick={() => removeComment(comment.id)}>
-                            Удалить
-                          </button>
-                          <button
-                            className="comment-thread-link"
-                            onClick={async () => {
-                              const updated = await api.updateComment(comment.id, {
-                                resolved: !comment.resolved,
-                              });
-                              setComments((prev) =>
-                                prev.map((item) => (item.id === updated.id ? updated : item))
-                              );
-                            }}
-                          >
-                            {comment.resolved ? 'Открыть' : 'Закрыть'}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
               </div>
-            ) : rightMode === 'timeline' ? (
-              <div className="timeline-list">
-                {revisions.length === 0 && <div className="timeline-empty">Пока нет ревизий</div>}
-                {revisions.map((rev) => (
-                  <div key={rev.id} className="timeline-item">
-                    <div className="timeline-title">Действие</div>
-                    <div className="timeline-time">
-                      {new Date(rev.createdAt).toLocaleString('ru-RU')}
-                    </div>
-                    <div className="timeline-actions">
-                      <button className="comment-thread-link" onClick={() => restoreRevision(rev.id)}>
-                        Перейти
-                      </button>
-                      <button className="comment-thread-link" onClick={() => removeRevision(rev.id)}>
-                        Удалить
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="timeline-list">
-                <div className="timeline-item">
-                  <div className="timeline-title">Файл</div>
-                  <div className="timeline-time">{title || 'Без названия'}</div>
-                </div>
-                <div className="timeline-item">
-                  <div className="timeline-title">Описание</div>
-                  <div className="timeline-time">{description || 'пока пусто'}</div>
-                </div>
-                <div className="timeline-item">
-                  <div className="timeline-title">Создан</div>
-                  <div className="timeline-time">
-                    {pageMeta.createdAt
-                      ? new Date(pageMeta.createdAt).toLocaleString('ru-RU')
-                      : '-'}
-                  </div>
-                </div>
-                <div className="timeline-item">
-                  <div className="timeline-title">Обновлен</div>
-                  <div className="timeline-time">
-                    {pageMeta.updatedAt
-                      ? new Date(pageMeta.updatedAt).toLocaleString('ru-RU')
-                      : '-'}
-                  </div>
-                </div>
-                <div className="timeline-item">
-                  <div className="timeline-title">Слов в заметке</div>
-                  <div className="timeline-time">{countWords(content)}</div>
-                </div>
-              </div>
-            )}
-          </aside>
-        )}
-      </div>
+            ))}
+          </div>
+        </FloatingPanel>
+      )}
 
       {showTableModal && (
         <div className="modal-overlay" onClick={() => setShowTableModal(false)}>
@@ -774,11 +643,32 @@ export default function PageEditor() {
             <button className="ai-floating-close" onClick={() => setShowAiPanel(false)}>×</button>
           </div>
           <div className="ai-floating-body">
+            {/* Переключатель режима */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+              <button
+                className={`toolbar-btn${aiMode === 'page' ? ' active' : ''}`}
+                style={{ flex: 1, height: 30, fontSize: 12 }}
+                onClick={() => { setAiMode('page'); setAiResult(''); }}
+              >
+                Этот файл
+              </button>
+              <button
+                className={`toolbar-btn${aiMode === 'search' ? ' active' : ''}`}
+                style={{ flex: 1, height: 30, fontSize: 12 }}
+                onClick={() => { setAiMode('search'); setAiResult(''); }}
+              >
+                Поиск по всем
+              </button>
+            </div>
             <textarea
               className="ai-block-input"
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder="Введите промпт..."
+              placeholder={
+                aiMode === 'search'
+                  ? 'Например: найди где описана интеграция с MWS Tables'
+                  : 'Введите промпт для работы с этим файлом...'
+              }
               disabled={aiLoading}
             />
             <div className="ai-block-actions">
@@ -786,10 +676,35 @@ export default function PageEditor() {
                 <span className="ai-loading-text">Генерация...</span>
               ) : (
                 <button className="btn btn-primary" onClick={runAi}>
-                  Выполнить
+                  {aiMode === 'search' ? 'Найти' : 'Выполнить'}
                 </button>
               )}
             </div>
+            {/* Результат поиска по всем документам */}
+            {aiResult && (
+              <div style={{
+                marginTop: 10,
+                padding: 12,
+                background: 'var(--surface)',
+                borderRadius: 6,
+                fontSize: 13,
+                whiteSpace: 'pre-wrap',
+                color: 'var(--text)',
+                lineHeight: 1.6,
+                maxHeight: 300,
+                overflowY: 'auto',
+              }}>
+                {aiResult}
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    style={{ fontSize: 11, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                    onClick={() => setAiResult('')}
+                  >
+                    Очистить
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
