@@ -31,7 +31,7 @@ export default function LeftSidebar() {
 
   const handleCreateSpace = () => {
     setIsOpen(false);
-    navigate('/');
+    navigate('/', { state: { forceCreateSpace: true } });
   };
 
   const currentSpace = activeSpace || spaces[0];

@@ -11,6 +11,30 @@ import {
 } from '../middleware/validators';
 
 const router = Router();
+const DEFAULT_PAGE_TITLE = 'Без названия';
+
+async function getUniqueSpacePageTitle(spaceId: string, title: string): Promise<string> {
+  const normalizedBase = title.trim() || DEFAULT_PAGE_TITLE;
+  const pages = await prisma.page.findMany({
+    where: {
+      spaceId,
+      deletedAt: null,
+    },
+    select: { title: true },
+  });
+  const takenTitles = new Set(pages.map((page) => page.title.trim().toLowerCase()));
+
+  if (!takenTitles.has(normalizedBase.toLowerCase())) {
+    return normalizedBase;
+  }
+
+  let suffix = 2;
+  while (takenTitles.has(`${normalizedBase} ${suffix}`.toLowerCase())) {
+    suffix += 1;
+  }
+
+  return `${normalizedBase} ${suffix}`;
+}
 
 router.use(requireAuth);
 
@@ -207,10 +231,11 @@ router.post('/:spaceId/pages', loadSpaceMember, requireSpaceRole('EDITOR'), asyn
     const rawTitle = req.body?.title;
     const rawContent = req.body?.content;
     const rawIcon = req.body?.icon;
-    const title = (typeof rawTitle === 'string' && rawTitle.trim()) ? rawTitle.trim() : 'Без названия';
+    const requestedTitle = (typeof rawTitle === 'string' && rawTitle.trim()) ? rawTitle.trim() : DEFAULT_PAGE_TITLE;
     const content = validateJsonContent(rawContent);
     if (content === null) return res.status(400).json({ error: 'Content must be a valid object' });
     const icon = typeof rawIcon === 'string' ? rawIcon.substring(0, 50) : '';
+    const title = await getUniqueSpacePageTitle(spaceId, requestedTitle);
     const page = await prisma.page.create({
       data: {
         title,

@@ -6,6 +6,9 @@ import { requireAuth } from '../middleware/requireAuth';
 const router = Router();
 const SPACE_ROLE_LEVEL = { OWNER: 4, ADMIN: 3, EDITOR: 2, READER: 1 } as const;
 const EMPTY_PAGE_CONTENT = { type: 'doc', content: [{ type: 'paragraph' }] } as const;
+const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'ftp:', 'ftps:']);
+const MAX_CONTENT_DEPTH = 100;
+const DEFAULT_PAGE_TITLE = 'Без названия';
 
 function validateTitle(title: unknown): string | null {
   if (typeof title !== 'string') return null;
@@ -14,10 +17,147 @@ function validateTitle(title: unknown): string | null {
   return trimmed;
 }
 
+async function getUniquePersonalPageTitle(title: string, ownerId: string): Promise<string> {
+  const normalizedBase = title.trim() || DEFAULT_PAGE_TITLE;
+  const pages = await prisma.page.findMany({
+    where: {
+      ownerId,
+      spaceId: null,
+      deletedAt: null,
+    },
+    select: { title: true },
+  });
+  const takenTitles = new Set(pages.map((page) => page.title.trim().toLowerCase()));
+
+  if (!takenTitles.has(normalizedBase.toLowerCase())) {
+    return normalizedBase;
+  }
+
+  let suffix = 2;
+  while (takenTitles.has(`${normalizedBase} ${suffix}`.toLowerCase())) {
+    suffix += 1;
+  }
+
+  return `${normalizedBase} ${suffix}`;
+}
+
+function isSafeLinkHref(href: string): boolean {
+  if (href.startsWith('/')) {
+    return true;
+  }
+
+  try {
+    const url = new URL(href, 'http://localhost');
+    return SAFE_LINK_PROTOCOLS.has(url.protocol.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function isSafeImageSrc(src: string): boolean {
+  if (src.startsWith('/api/files/static/')) {
+    return true;
+  }
+
+  try {
+    const url = new URL(src, 'http://localhost');
+    return url.origin === 'http://localhost' && url.pathname.startsWith('/api/files/static/');
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeContentNode(node: unknown, depth = 0): unknown {
+  if (depth > MAX_CONTENT_DEPTH) {
+    return null;
+  }
+
+  if (Array.isArray(node)) {
+    return node
+      .map((item) => sanitizeContentNode(item, depth + 1))
+      .filter((item) => item !== null);
+  }
+
+  if (!node || typeof node !== 'object') {
+    return node;
+  }
+
+  const input = node as Record<string, unknown>;
+  const output: Record<string, unknown> = { ...input };
+
+  if (Array.isArray(input.marks)) {
+    output.marks = input.marks
+      .map((mark) => {
+        if (!mark || typeof mark !== 'object') return null;
+        const markObj = mark as Record<string, unknown>;
+        if (markObj.type !== 'link') {
+          return sanitizeContentNode(markObj, depth + 1);
+        }
+
+        const attrs =
+          markObj.attrs && typeof markObj.attrs === 'object'
+            ? { ...(markObj.attrs as Record<string, unknown>) }
+            : {};
+        const href = typeof attrs.href === 'string' ? attrs.href.trim() : '';
+        if (!href || !isSafeLinkHref(href)) {
+          return null;
+        }
+        attrs.href = href;
+        return { ...markObj, attrs };
+      })
+      .filter((mark) => mark !== null);
+  }
+
+  if (Array.isArray(input.content)) {
+    output.content = input.content
+      .map((child) => sanitizeContentNode(child, depth + 1))
+      .filter((child) => child !== null);
+  }
+
+  if (input.type === 'image') {
+    const attrs =
+      input.attrs && typeof input.attrs === 'object'
+        ? { ...(input.attrs as Record<string, unknown>) }
+        : {};
+    const src = typeof attrs.src === 'string' ? attrs.src.trim() : '';
+    if (!src || !isSafeImageSrc(src)) {
+      return null;
+    }
+    attrs.src = src;
+    output.attrs = attrs;
+  }
+
+  if (input.type === 'mwsTable') {
+    const attrs =
+      input.attrs && typeof input.attrs === 'object'
+        ? { ...(input.attrs as Record<string, unknown>) }
+        : {};
+    const dstId = typeof attrs.dstId === 'string' ? attrs.dstId.trim() : '';
+    if (!/^dst[a-zA-Z0-9]{10,}$/.test(dstId)) {
+      return null;
+    }
+    attrs.dstId = dstId;
+    if (typeof attrs.title === 'string') {
+      attrs.title = attrs.title.substring(0, 200);
+    }
+    output.attrs = attrs;
+  }
+
+  return output;
+}
+
+function sanitizeContent(content: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = sanitizeContentNode(content, 0);
+  if (!sanitized || typeof sanitized !== 'object' || Array.isArray(sanitized)) {
+    return { ...EMPTY_PAGE_CONTENT };
+  }
+  return sanitized as Record<string, unknown>;
+}
+
 function validateContent(content: unknown): object | null {
   if (content === null || content === undefined) return { ...EMPTY_PAGE_CONTENT };
   if (typeof content !== 'object' || Array.isArray(content)) return null;
-  return content as Record<string, unknown>;
+  return sanitizeContent(content as Record<string, unknown>);
 }
 
 function validateIcon(icon: unknown): string {
@@ -36,6 +176,11 @@ type PageAccessRecord = {
   updatedAt: Date;
   content: Prisma.JsonValue;
 };
+
+function withoutCollabState<T extends { collabState?: unknown }>(page: T): Omit<T, 'collabState'> {
+  const { collabState: _collabState, ...rest } = page;
+  return rest;
+}
 
 async function getSpaceRole(spaceId: string, userId: string): Promise<keyof typeof SPACE_ROLE_LEVEL | null> {
   const membership = await prisma.spaceMember.findFirst({
@@ -319,7 +464,14 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
       });
       return res.status(403).json({ error: 'Нет прав на просмотр этой страницы' });
     }
-    res.json(page);
+    const safePage = {
+      ...page,
+      content:
+        page.content && typeof page.content === 'object' && !Array.isArray(page.content)
+          ? sanitizeContent(page.content as Record<string, unknown>)
+          : page.content,
+    };
+    res.json(withoutCollabState(safePage));
   } catch {
     res.status(500).json({ error: 'Failed to fetch page' });
   }
@@ -328,12 +480,13 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
 router.post('/', requireAuth, async (req: Request, res: Response) => {
   try {
     const { title, content, icon } = req.body;
-    const validTitle = validateTitle(title) || 'Без названия';
+    const requestedTitle = validateTitle(title) || DEFAULT_PAGE_TITLE;
     const validContent = validateContent(content);
     if (validContent === null) {
       return res.status(400).json({ error: 'Content must be a valid object' });
     }
     const validIcon = validateIcon(icon);
+    const validTitle = await getUniquePersonalPageTitle(requestedTitle, req.authUser!.id);
 
     const payload: { title: string; icon: string; ownerId: string; content?: Prisma.InputJsonValue } = {
       title: validTitle,
@@ -344,7 +497,7 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
       payload.content = validContent as Prisma.InputJsonValue;
     }
     const page = await prisma.page.create({ data: payload });
-    res.status(201).json(page);
+    res.status(201).json(withoutCollabState(page));
   } catch {
     res.status(500).json({ error: 'Failed to create page' });
   }
@@ -417,7 +570,7 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
       await syncPageLinks(existing as PageAccessRecord, content as Record<string, unknown>);
     }
 
-    res.json(page);
+    res.json(withoutCollabState(page));
   } catch {
     res.status(500).json({ error: 'Failed to update page' });
   }
@@ -546,7 +699,7 @@ router.post('/:id/revisions/:revisionId/restore', requireAuth, async (req: Reque
     if (revision.content && typeof revision.content === 'object' && !Array.isArray(revision.content)) {
       await syncPageLinks(page as PageAccessRecord, revision.content as Record<string, unknown>);
     }
-    res.json(updated);
+    res.json(withoutCollabState(updated));
   } catch {
     res.status(500).json({ error: 'Failed to restore revision' });
   }

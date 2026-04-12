@@ -16,6 +16,9 @@ import FloatingComments, { FloatingPanel } from '../components/FloatingComments'
 
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
 const LAST_SPACE_PAGE_KEY_PREFIX = 'wikilive-last-space-page:';
+type ChainWithImage = ReturnType<TiptapEditor['chain']> & {
+  setImage: (attrs: { src: string }) => ReturnType<TiptapEditor['chain']>;
+};
 
 function isTiptapNode(value: unknown): value is JSONContent {
   return typeof value === 'object' && value !== null && 'type' in (value as Record<string, unknown>);
@@ -59,12 +62,18 @@ export default function PageEditor() {
   const [showTimeline, setShowTimeline] = useState(false);
   const [revisions, setRevisions] = useState<Array<{ id: string; pageId: string; createdAt: string; content: JSONContent }>>([]);
   const [editorInstance, setEditorInstance] = useState<TiptapEditor | null>(null);
-  const [pageMeta, setPageMeta] = useState<{ createdAt?: string; updatedAt?: string }>({});
   const [linkPopover, setLinkPopover] = useState<{
     href: string;
     text: string;
     newTab: boolean;
   } | null>(null);
+  const [showPageLinkModal, setShowPageLinkModal] = useState(false);
+  const [pageLinkQuery, setPageLinkQuery] = useState('');
+  const [pageLinkLoading, setPageLinkLoading] = useState(false);
+  const [pageLinkOptions, setPageLinkOptions] = useState<Array<{ id: string; title: string; spaceId?: string | null }>>([]);
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imageDragOver, setImageDragOver] = useState(false);
 
   const { bumpPagesList } = useContext(PagesListContext);
   const titleDebounceRef = useRef<number | null>(null);
@@ -118,8 +127,12 @@ export default function PageEditor() {
   useEffect(() => {
     skipTitleDebounceRef.current = true;
     let mounted = true;
+    setLoading(true);
+
     async function loadPage() {
       if (!pageId) {
+        setTitle('Без названия');
+        setContent(EMPTY_DOC);
         setLoading(false);
         return;
       }
@@ -131,16 +144,19 @@ export default function PageEditor() {
         let nextContent = normalizeEditorContent(page.content);
         const localRaw = localStorage.getItem(`wikilive-page-${pageId}`);
         if (localRaw) {
-          const localData = JSON.parse(localRaw);
-          const serverTs = new Date(page.updatedAt).getTime();
-          if ((localData.updatedAt || 0) > serverTs) {
-            nextTitle = localData.title || nextTitle;
-            nextContent = normalizeEditorContent(localData.content) || nextContent;
+          try {
+            const localData = JSON.parse(localRaw) as { updatedAt?: number; title?: string; content?: unknown };
+            const serverTs = new Date(page.updatedAt).getTime();
+            if ((localData.updatedAt || 0) > serverTs) {
+              nextTitle = localData.title || nextTitle;
+              nextContent = normalizeEditorContent(localData.content) || nextContent;
+            }
+          } catch {
+            localStorage.removeItem(`wikilive-page-${pageId}`);
           }
         }
         setTitle(nextTitle);
         setContent(nextContent);
-        setPageMeta({ createdAt: page.createdAt, updatedAt: page.updatedAt });
         skipTitleDebounceRef.current = true;
       } catch {
         /* страница не загрузилась */
@@ -316,6 +332,41 @@ export default function PageEditor() {
     return () => window.removeEventListener('keydown', onKey);
   }, [editorInstance, openLinkPopover]);
 
+  useEffect(() => {
+    if (!showPageLinkModal) {
+      setPageLinkOptions([]);
+      setPageLinkLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const query = pageLinkQuery.trim();
+
+    const load = async () => {
+      setPageLinkLoading(true);
+      try {
+        const results = await api.searchPages(query || title, spaceId ?? null);
+        if (!cancelled) {
+          setPageLinkOptions(results);
+        }
+      } catch {
+        if (!cancelled) {
+          setPageLinkOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setPageLinkLoading(false);
+        }
+      }
+    };
+
+    const timeoutId = window.setTimeout(load, query ? 150 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [showPageLinkModal, pageLinkQuery, spaceId, title]);
+
   const applyLink = () => {
     if (!editorInstance || !linkPopover) return;
     const href = linkPopover.href.trim();
@@ -347,59 +398,124 @@ export default function PageEditor() {
     setLinkPopover(null);
   };
 
+  const openPageLinkModal = useCallback(() => {
+    if (!editorInstance) return;
+    const { from, to } = editorInstance.state.selection;
+    const selectedText = from !== to ? editorInstance.state.doc.textBetween(from, to, '').trim() : '';
+    const wikiAttrs = editorInstance.getAttributes('wikiLink');
+    setPageLinkQuery(selectedText || String(wikiAttrs.title || ''));
+    setShowPageLinkModal(true);
+  }, [editorInstance]);
+
+  const insertWikiLink = useCallback((targetTitle: string) => {
+    if (!editorInstance) return;
+    const editor = editorInstance;
+    const { from, to } = editor.state.selection;
+    const selectionText = from !== to ? editor.state.doc.textBetween(from, to, '') : '';
+    const text = selectionText || targetTitle;
+
+    if (from !== to) {
+      editor
+        .chain()
+        .focus()
+        .unsetLink()
+        .unsetWikiLink()
+        .insertContentAt({ from, to }, text)
+        .setTextSelection({ from, to: from + text.length })
+        .setWikiLink({ title: targetTitle })
+        .run();
+      return;
+    }
+
+    editor
+      .chain()
+      .focus()
+      .insertContent(text)
+      .setTextSelection({ from, to: from + text.length })
+      .setWikiLink({ title: targetTitle })
+      .run();
+  }, [editorInstance]);
+
+  const handleSelectPageLink = useCallback((targetTitle: string) => {
+    insertWikiLink(targetTitle);
+    setShowPageLinkModal(false);
+    setPageLinkQuery('');
+  }, [insertWikiLink]);
+
+  const handleCreatePageLink = useCallback(async () => {
+    const nextTitle = pageLinkQuery.trim();
+    if (!nextTitle) return;
+
+    try {
+      const existing = pageLinkOptions.find(
+        (item) => item.title.trim().toLowerCase() === nextTitle.toLowerCase()
+      );
+
+      if (!existing) {
+        if (spaceId) {
+          await api.createSpacePage(spaceId, { title: nextTitle });
+        } else {
+          await api.createPage({ title: nextTitle });
+        }
+        bumpPagesList();
+      }
+
+      handleSelectPageLink(nextTitle);
+    } catch {
+      alert('Could not create page link');
+    }
+  }, [pageLinkOptions, pageLinkQuery, spaceId, bumpPagesList, handleSelectPageLink]);
+
   const removeLinkFromPopover = () => {
     if (!editorInstance) return;
     editorInstance.chain().focus().extendMarkRange('link').unsetLink().run();
     setLinkPopover(null);
   };
 
+  const handleImageUpload = async (file: File) => {
+    if (imageUploading) return;
+    if (!['image/jpeg', 'image/png', 'image/gif'].includes(file.type)) {
+      alert('Поддерживаются только JPG, PNG и GIF');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Файл слишком большой. Максимум 5 МБ.');
+      return;
+    }
+    setImageUploading(true);
+    try {
+      const url = await api.uploadImage(file);
+      if (editorInstance) {
+        (editorInstance.chain().focus() as ChainWithImage).setImage({ src: url }).run();
+      }
+      setShowImageModal(false);
+    } catch (e) {
+      alert('Не удалось загрузить изображение: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setImageUploading(false);
+    }
+  };
+
   const runToolbarAction = (action: string) => {
     if (!editorInstance) return;
+    const chain = editorInstance.chain().focus();
     switch (action) {
-      case 'undo':
-        editorInstance.chain().focus().undo().run();
-        break;
-      case 'redo':
-        editorInstance.chain().focus().redo().run();
-        break;
-      case 'bold':
-        editorInstance.chain().focus().toggleBold().run();
-        break;
-      case 'italic':
-        editorInstance.chain().focus().toggleItalic().run();
-        break;
-      case 'underline':
-        editorInstance.chain().focus().toggleUnderline().run();
-        break;
-      case 'h1':
-        editorInstance.chain().focus().toggleHeading({ level: 1 }).run();
-        break;
-      case 'h2':
-        editorInstance.chain().focus().toggleHeading({ level: 2 }).run();
-        break;
-      case 'h3':
-        editorInstance.chain().focus().toggleHeading({ level: 3 }).run();
-        break;
-      case 'bullet':
-        editorInstance.chain().focus().toggleBulletList().run();
-        break;
-      case 'ordered':
-        editorInstance.chain().focus().toggleOrderedList().run();
-        break;
-      case 'quote':
-        editorInstance.chain().focus().toggleBlockquote().run();
-        break;
-      case 'code':
-        editorInstance.chain().focus().toggleCodeBlock().run();
-        break;
-      case 'rule':
-        editorInstance.chain().focus().setHorizontalRule().run();
-        break;
-      case 'link':
-        openLinkPopover();
-        break;
-      default:
-        break;
+      case 'undo': chain.undo().run(); break;
+      case 'redo': chain.redo().run(); break;
+      case 'bold': chain.toggleBold().run(); break;
+      case 'italic': chain.toggleItalic().run(); break;
+      case 'underline': chain.toggleUnderline().run(); break;
+      case 'h1': chain.toggleHeading({ level: 1 }).run(); break;
+      case 'h2': chain.toggleHeading({ level: 2 }).run(); break;
+      case 'h3': chain.toggleHeading({ level: 3 }).run(); break;
+      case 'bullet': chain.toggleBulletList().run(); break;
+      case 'ordered': chain.toggleOrderedList().run(); break;
+      case 'quote': chain.toggleBlockquote().run(); break;
+      case 'code': chain.toggleCodeBlock().run(); break;
+      case 'rule': chain.setHorizontalRule().run(); break;
+      case 'link': openLinkPopover(); break;
+      case 'pageLink': openPageLinkModal(); break;
+      default: break;
     }
   };
 
@@ -460,6 +576,7 @@ export default function PageEditor() {
             { id: 'code', label: '</>' },
             { id: 'rule', label: '—' },
             { id: 'link', label: '@' },
+            { id: 'pageLink', label: '[[' },
           ].map((item) => (
             <button key={item.id} className="toolbar-btn" onClick={() => runToolbarAction(item.id)}>
               {item.label}
@@ -467,6 +584,9 @@ export default function PageEditor() {
           ))}
           <button className="toolbar-btn" onClick={openTablePicker} title="Таблица MWS">
             MWS
+          </button>
+          <button className="toolbar-btn" onClick={() => setShowImageModal(true)} title="Вставить изображение">
+            🖼
           </button>
           <button className="toolbar-btn" onClick={insertAiBlock} title="ai">
             AI
@@ -511,6 +631,7 @@ export default function PageEditor() {
               onUpdate={setContent}
               onSave={saveNow}
               onInsertMwsTable={openTablePicker}
+              onInsertPageLink={openPageLinkModal}
               onInsertAiBlock={insertAiBlock}
               onEditorReady={setEditorInstance}
               onRequestLinkEdit={openLinkPopover}
@@ -589,6 +710,48 @@ export default function PageEditor() {
         </div>
       )}
 
+      {showPageLinkModal && (
+        <div className="modal-overlay" onClick={() => setShowPageLinkModal(false)}>
+          <div className="modal link-popover-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Wiki link</h3>
+            <label className="link-field">
+              <span>Page</span>
+              <input
+                type="text"
+                value={pageLinkQuery}
+                onChange={(e) => setPageLinkQuery(e.target.value)}
+                placeholder="Find or create a page"
+                autoFocus
+              />
+            </label>
+            <div className="modal-list">
+              {pageLinkLoading && <div className="modal-list-item">Searching...</div>}
+              {!pageLinkLoading && pageLinkOptions.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="modal-list-item"
+                  onClick={() => handleSelectPageLink(item.title)}
+                >
+                  <span>{item.title}</span>
+                </button>
+              ))}
+              {!pageLinkLoading && pageLinkOptions.length === 0 && (
+                <div className="modal-list-item">No pages found</div>
+              )}
+            </div>
+            <div className="link-popover-actions">
+              <button type="button" className="btn btn-primary" onClick={() => void handleCreatePageLink()}>
+                Create and link
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => setShowPageLinkModal(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {linkPopover && (
         <div className="modal-overlay" onClick={() => setLinkPopover(null)}>
           <div className="modal link-popover-modal" onClick={(e) => e.stopPropagation()}>
@@ -629,6 +792,66 @@ export default function PageEditor() {
                 Удалить ссылку
               </button>
               <button type="button" className="btn btn-ghost" onClick={() => setLinkPopover(null)}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showImageModal && (
+        <div className="modal-overlay" onClick={() => !imageUploading && setShowImageModal(false)}>
+          <div className="modal image-upload-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="image-upload-modal-header">
+              <h3>Вставить изображение</h3>
+              <button
+                className="image-upload-modal-close"
+                onClick={() => !imageUploading && setShowImageModal(false)}
+                disabled={imageUploading}
+              >
+                ×
+              </button>
+            </div>
+            <div
+              className={`image-upload-dropzone${imageDragOver ? ' drag-over' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setImageDragOver(true); }}
+              onDragLeave={() => setImageDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setImageDragOver(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) void handleImageUpload(file);
+              }}
+              onClick={() => {
+                if (imageUploading) return;
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/jpeg,image/png,image/gif';
+                input.onchange = () => {
+                  const file = input.files?.[0];
+                  if (file) void handleImageUpload(file);
+                };
+                input.click();
+              }}
+            >
+              {imageUploading ? (
+                <div className="image-upload-spinner">Загрузка…</div>
+              ) : (
+                <>
+                  <span className="image-upload-icon">🖼</span>
+                  <span className="image-upload-hint">
+                    <span className="image-upload-link">Выберите файл</span> или перетащите его сюда
+                  </span>
+                  <span className="image-upload-formats">Формат файла: JPG, PNG, GIF. Не более 5 МБ</span>
+                </>
+              )}
+            </div>
+            <div className="image-upload-actions">
+              <button
+                className="btn btn-ghost"
+                onClick={() => !imageUploading && setShowImageModal(false)}
+                disabled={imageUploading}
+              >
                 Отмена
               </button>
             </div>
@@ -719,10 +942,4 @@ function extractText(node: JSONContent | JSONContent[] | string | undefined): st
   if (node.text) return String(node.text);
   if (node.content) return extractText(node.content);
   return '';
-}
-
-function countWords(content: JSONContent): number {
-  const plain = extractText(content).trim();
-  if (!plain) return 0;
-  return plain.split(/\s+/).filter(Boolean).length;
 }

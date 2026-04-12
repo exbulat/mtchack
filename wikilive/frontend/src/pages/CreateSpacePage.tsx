@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useSpaces } from '../context/SpaceContext';
 
 export default function CreateSpacePage() {
@@ -7,14 +7,20 @@ export default function CreateSpacePage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const { createSpace, activeSpace, spaces, loading } = useSpaces();
+  const location = useLocation();
   const navigate = useNavigate();
+  const forceCreateSpace =
+    typeof location.state === 'object' &&
+    location.state !== null &&
+    'forceCreateSpace' in location.state &&
+    Boolean((location.state as { forceCreateSpace?: boolean }).forceCreateSpace);
 
   useEffect(() => {
     if (loading) return;
-    if (spaces.length > 0 && activeSpace) {
+    if (!forceCreateSpace && spaces.length > 0 && activeSpace) {
       navigate(`/spaces/${activeSpace.id}`, { replace: true });
     }
-  }, [activeSpace, spaces, loading, navigate]);
+  }, [activeSpace, spaces, loading, navigate, forceCreateSpace]);
 
   const handleCreate = async () => {
     if (!spaceName.trim()) return;

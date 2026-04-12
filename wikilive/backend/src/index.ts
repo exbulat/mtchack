@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { Server as HocuspocusServer } from '@hocuspocus/server';
 import { PrismaClient } from '@prisma/client';
+import * as Y from 'yjs';
 import pagesRouter from './routes/pages';
 import spacesRouter from './routes/spaces';
 import filesRouter from './routes/files';
@@ -27,16 +28,22 @@ export const prisma = new PrismaClient();
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const WS_PORT = parseInt(process.env.WS_PORT || '3002', 10);
+const SPACE_ROLE_LEVEL = { OWNER: 4, ADMIN: 3, EDITOR: 2, READER: 1 } as const;
 
 // доверяем первому прокси (nginx в docker-compose)
 app.set('trust proxy', 1);
 
 const wsOrigins: string[] = [`ws://localhost:${WS_PORT}`];
-const allowedOrigin = process.env.ALLOWED_ORIGIN || '';
-if (allowedOrigin.startsWith('https://')) {
-  wsOrigins.push(`wss://${allowedOrigin.replace(/^https:\/\//, '')}`);
-} else if (allowedOrigin.startsWith('http://')) {
-  wsOrigins.push(`ws://${allowedOrigin.replace(/^http:\/\//, '')}`);
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'http://localhost:3000')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+for (const allowedOrigin of ALLOWED_ORIGINS) {
+  if (allowedOrigin.startsWith('https://')) {
+    wsOrigins.push(`wss://${allowedOrigin.replace(/^https:\/\//, '')}`);
+  } else if (allowedOrigin.startsWith('http://')) {
+    wsOrigins.push(`ws://${allowedOrigin.replace(/^http:\/\//, '')}`);
+  }
 }
 
 app.use(helmet());
@@ -63,7 +70,6 @@ app.use(loadAuthUser);
 // CSRF-защита на write-операциях
 app.use(csrfOriginCheck);
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'http://localhost:3000').split(',');
 app.use(
   cors({
     origin: ALLOWED_ORIGINS,
@@ -100,7 +106,15 @@ app.get('/api/health', (_req, res) => {
 const hocuspocus = HocuspocusServer.configure({
   port: WS_PORT,
   quiet: true,
+  debounce: 1000,
+  maxDebounce: 5000,
   async onAuthenticate({ requestHeaders, connection, documentName }) {
+    const origin =
+      typeof requestHeaders.origin === 'string' ? requestHeaders.origin.trim() : undefined;
+    if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+      throw new Error('Forbidden: invalid websocket origin');
+    }
+
     const cookieHeader =
       typeof requestHeaders.cookie === 'string' ? requestHeaders.cookie : undefined;
     const token = parseCookieValue(cookieHeader, AUTH_COOKIE);
@@ -117,9 +131,9 @@ const hocuspocus = HocuspocusServer.configure({
     if (pageId) {
       const page = await prisma.page.findUnique({
         where: { id: pageId },
-        select: { ownerId: true, spaceId: true },
+        select: { ownerId: true, spaceId: true, deletedAt: true },
       });
-      if (!page) {
+      if (!page || page.deletedAt) {
         throw new Error('Forbidden: page not found');
       }
       // Владелец всегда имеет доступ
@@ -138,6 +152,8 @@ const hocuspocus = HocuspocusServer.configure({
             if (!space || space.ownerId !== user.id) {
               throw new Error('Forbidden: not a space member');
             }
+          } else if (SPACE_ROLE_LEVEL[member.role] < SPACE_ROLE_LEVEL.EDITOR) {
+            throw new Error('Forbidden: editor role required');
           }
         } else {
           // Страница без пространства — только владелец
@@ -148,12 +164,27 @@ const hocuspocus = HocuspocusServer.configure({
     connection.isAuthenticated = true;
     return { user: { name: user.name, color: user.avatarColor } };
   },
+  async onLoadDocument(data) {
+    const pageId = data.documentName;
+    const page = await prisma.page.findUnique({
+      where: { id: pageId },
+      select: { collabState: true, deletedAt: true },
+    });
+    if (!page || page.deletedAt || !page.collabState) {
+      return null;
+    }
+
+    const ydoc = new Y.Doc();
+    Y.applyUpdate(ydoc, new Uint8Array(page.collabState));
+    return ydoc;
+  },
   async onStoreDocument(data) {
     const pageId = data.documentName;
     try {
+      const collabState = Buffer.from(Y.encodeStateAsUpdate(data.document));
       await prisma.page.update({
         where: { id: pageId },
-        data: { updatedAt: new Date() },
+        data: { collabState, updatedAt: new Date() },
       });
     } catch (err) {
       console.error('[WS] Failed to update page:', err instanceof Error ? err.message : 'Unknown error');

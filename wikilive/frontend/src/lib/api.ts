@@ -31,7 +31,7 @@ export interface Page {
   createdAt: string;
   updatedAt: string;
   incomingLinks: Array<{
-    source: { id: string; title: string; icon: string; spaceId?: string | null };
+    source: { id: string; title: string; icon: string };
   }>;
 }
 
@@ -184,8 +184,6 @@ export const api = {
 
   getNode: (nodeId: string) => request<Record<string, unknown>>(`/tables/nodes/${nodeId}`),
 
-  // fieldKey=id: ключи в record.fields совпадают с id полей из /fields (TableEmbed индексирует ячейки по field.id).
-  // При fieldKey=name MWS отдаёт объекты с ключами по имени колонки — тогда rowFields[field.id] всегда пусто.
   getRecords: (dstId: string, pageSize = 100) =>
     request<MwsRecordsResponse>(`/tables/datasheets/${dstId}/records?pageSize=${pageSize}&fieldKey=id`),
 
@@ -279,4 +277,20 @@ export const api = {
 
   deleteSpace: (spaceId: string) =>
     request<{ ok: boolean }>(`/spaces/${spaceId}`, { method: 'DELETE' }),
+
+  uploadImage: async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append('image', file);
+    const res = await fetch(`${API_BASE}/files/upload`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = (await res.json()) as { url: string };
+    return data.url;
+  },
 };

@@ -20,6 +20,30 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
   const retryRef = useRef<number | null>(null);
   const retryCountRef = useRef(0);
   const latestRef = useRef({ title, content });
+  const previousPageIdRef = useRef<string | null>(pageId);
+  const skipNextAutosaveRef = useRef(false);
+
+  useEffect(() => {
+    if (pageId === previousPageIdRef.current) return;
+
+    previousPageIdRef.current = pageId;
+    skipNextAutosaveRef.current = true;
+    setPendingChanges(false);
+    setIsSaving(false);
+    setSaveError(false);
+
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+
+    if (retryRef.current) {
+      window.clearTimeout(retryRef.current);
+      retryRef.current = null;
+    }
+
+    retryCountRef.current = 0;
+  }, [pageId]);
 
   // Always track latest values for retry
   useEffect(() => {
@@ -38,6 +62,12 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
     },
     [pageId]
   );
+
+  useEffect(() => {
+    if (!pageId || !enabled) return;
+    if (skipNextAutosaveRef.current) return;
+    persistLocal(title, content);
+  }, [pageId, enabled, title, content, persistLocal]);
 
   const attemptServerSave = useCallback(
     async (t: string, c: Record<string, unknown>): Promise<boolean> => {
@@ -105,6 +135,10 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
   // Debounced autosave — triggers on content/title changes
   useEffect(() => {
     if (!pageId || !enabled) return;
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false;
+      return;
+    }
     setPendingChanges(true);
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => void saveNow(), DEBOUNCE_MS);

@@ -32,6 +32,8 @@ export const SLASH_ITEMS: SlashItem[] = [
   // Таблицы
   { id: 'simpleTable', label: 'Таблица', icon: '⊞', description: 'Простая таблица в документе', group: 'Вставка' },
   { id: 'mwsTable', label: 'Таблица MWS', icon: '📊', description: 'Живая таблица из MWS Tables', group: 'Вставка' },
+  { id: 'image', label: 'Изображение', icon: '🖼', description: 'Загрузить изображение с компьютера', group: 'Вставка' },
+  { id: 'pageLink', label: 'Wiki link', icon: '[[', description: 'Link to another page in the workspace', group: 'Р’СЃС‚Р°РІРєР°' },
   // AI
   { id: 'ai', label: 'AI-блок', icon: '✨', description: 'Сгенерировать текст с помощью ИИ', group: 'Вставка' },
 ];

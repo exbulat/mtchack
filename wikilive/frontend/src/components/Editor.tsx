@@ -7,9 +7,11 @@ import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import Link from '@tiptap/extension-link';
+import { Image as TiptapImageExt } from '@tiptap/extension-image';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 import { Node, mergeAttributes, type Editor as TiptapEditor, type JSONContent } from '@tiptap/core';
+import { NodeSelection } from '@tiptap/pm/state';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import * as Y from 'yjs';
@@ -71,6 +73,196 @@ const MwsTableExtension = Node.create({
   },
 });
 
+// ── Кастомный Image NodeView с resize + выравниванием ──
+function ImageNodeView(props: NodeViewProps) {
+  const { node, updateAttributes, selected } = props;
+  const src = node.attrs.src as string;
+  const alt = (node.attrs.alt as string) || '';
+  const width = (node.attrs.width as number) || null;
+  const align = (node.attrs.align as string) || 'center';
+  const effectiveWidth = width ?? 720;
+
+  const [isResizing, setIsResizing] = useState(false);
+  const [showToolbar, setShowToolbar] = useState(false);
+  const startRef = useRef<{ x: number; startW: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Закрываем тулбар при клике вне
+  useEffect(() => {
+    if (!showToolbar) return;
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as unknown as globalThis.Node)) setShowToolbar(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [showToolbar]);
+
+  const onResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const currentW = imgRef.current?.getBoundingClientRect().width ?? (width ?? 400);
+    startRef.current = { x: e.clientX, startW: currentW };
+    setIsResizing(true);
+
+    const onMove = (ev: MouseEvent) => {
+      if (!startRef.current) return;
+      const delta = ev.clientX - startRef.current.x;
+      const newW = Math.max(80, Math.min(1200, startRef.current.startW + delta));
+      updateAttributes({ width: Math.round(newW) });
+    };
+    const onUp = () => {
+      setIsResizing(false);
+      startRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const setWidthPreset = (nextWidth: number | null) => {
+    updateAttributes({ width: nextWidth });
+  };
+
+  const nudgeWidth = (delta: number) => {
+    const nextWidth = Math.max(160, Math.min(1200, effectiveWidth + delta));
+    updateAttributes({ width: nextWidth });
+  };
+
+  const wrapStyle: React.CSSProperties =
+    align === 'left'
+      ? { display: 'block', marginRight: 'auto', marginLeft: 0 }
+      : align === 'right'
+      ? { display: 'block', marginLeft: 'auto', marginRight: 0 }
+      : { display: 'block', marginLeft: 'auto', marginRight: 'auto' };
+
+  return (
+    <NodeViewWrapper
+      className={`image-node-wrapper${selected ? ' selected' : ''}`}
+      style={{ ...wrapStyle, position: 'relative', display: 'block' }}
+    >
+      <div ref={wrapRef} style={{ position: 'relative', display: 'inline-block' }}>
+        <img
+          ref={imgRef}
+          src={src}
+          alt={alt}
+          className="tiptap-image"
+          style={{
+            width: width ? `${width}px` : undefined,
+            maxWidth: '100%',
+            display: 'block',
+            cursor: isResizing ? 'ew-resize' : 'pointer',
+            outline: selected || showToolbar ? '2px solid var(--accent-border)' : 'none',
+            borderRadius: 'var(--radius)',
+          }}
+          onClick={() => setShowToolbar((v) => !v)}
+          draggable={false}
+        />
+        {/* Ручка resize — правый нижний угол */}
+        <div
+          className="image-resize-handle"
+          onMouseDown={onResizeStart}
+          title="Потяни для изменения размера"
+        />
+        {/* Тулбар */}
+        {showToolbar && (
+          <div className="image-toolbar" onMouseDown={(e) => e.stopPropagation()}>
+            <button
+              className="image-toolbar-btn"
+              title="Сделать меньше"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                nudgeWidth(-80);
+              }}
+            >
+              -
+            </button>
+            {([
+              { w: 240, label: 'sm', title: 'Маленькое изображение' },
+              { w: 420, label: 'md', title: 'Среднее изображение' },
+            ] as { w: number | null; label: string; title: string }[]).map(preset => (
+              <button
+                key={preset.label}
+                className={`image-toolbar-btn${width === preset.w ? ' active' : ''}`}
+                title={preset.title}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setWidthPreset(preset.w);
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+            <button
+              className={`image-toolbar-btn${width === null ? ' active' : ''}`}
+              title="На всю ширину колонки"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setWidthPreset(null);
+              }}
+            >
+              []
+            </button>
+            <button
+              className="image-toolbar-btn"
+              title="Сделать больше"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                nudgeWidth(80);
+              }}
+            >
+              +
+            </button>
+            <div className="image-toolbar-sep" />
+            {([
+              { id: 'left', label: 'L', title: 'Слева' },
+              { id: 'center', label: 'C', title: 'По центру' },
+              { id: 'right', label: 'R', title: 'Справа' },
+            ] as { id: string; label: string; title: string }[]).map(btn => (
+              <button
+                key={btn.id}
+                className={`image-toolbar-btn${align === btn.id ? ' active' : ''}`}
+                title={btn.title}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  updateAttributes({ align: btn.id });
+                }}
+              >
+                {btn.label}
+              </button>
+            ))}
+            <div className="image-toolbar-sep" />
+            <button
+              className="image-toolbar-btn image-toolbar-btn--danger"
+              title="Удалить"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                props.deleteNode();
+              }}
+            >
+              x
+            </button>
+          </div>
+        )}
+      </div>
+    </NodeViewWrapper>
+  );
+}
+
+const ImageExtension = TiptapImageExt.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: { default: null, parseHTML: (el) => el.getAttribute('data-width') ? Number(el.getAttribute('data-width')) : null, renderHTML: (a) => a.width ? { 'data-width': a.width, style: `width:${a.width}px` } : {} },
+      align: { default: 'center', parseHTML: (el) => el.getAttribute('data-align') || 'center', renderHTML: (a) => ({ 'data-align': a.align || 'center' }) },
+    };
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ImageNodeView);
+  },
+});
+
 // убираем / перед курсором
 function consumeSlashBeforeCursor(editor: TiptapEditor) {
   const { from } = editor.state.selection;
@@ -108,6 +300,7 @@ interface EditorProps {
   onUpdate: (json: JSONContent) => void;
   onSave?: () => void;
   onInsertMwsTable?: () => void;
+  onInsertPageLink?: () => void;
   onInsertAiBlock?: () => void;
   onEditorReady?: (editor: TiptapEditor | null) => void;
   onRequestLinkEdit?: () => void;
@@ -121,6 +314,7 @@ export default function Editor({
   onUpdate,
   onSave,
   onInsertMwsTable,
+  onInsertPageLink,
   onInsertAiBlock,
   onEditorReady,
   onRequestLinkEdit,
@@ -137,6 +331,7 @@ export default function Editor({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [bubblePos, setBubblePos] = useState({ x: 0, y: 0 });
   const [showBubble, setShowBubble] = useState(false);
+  const [bubbleDropdown, setBubbleDropdown] = useState<'align' | null>(null);
   const [tablePicker, setTablePicker] = useState<{ x: number; y: number } | null>(null);
   const [gridHover, setGridHover] = useState({ rows: 1, cols: 1 });
   const [tableCtx, setTableCtx] = useState<{ x: number; y: number } | null>(null);
@@ -208,6 +403,10 @@ export default function Editor({
       Placeholder.configure({
         placeholder: 'Начните писать или нажмите / для меню блоков...',
       }),
+      ImageExtension.configure({
+        inline: false,
+        allowBase64: false,
+      }),
       MwsTableExtension,
       WikiLink.configure({
         onNavigate: handleWikiNavigate,
@@ -245,6 +444,20 @@ export default function Editor({
         setShowBubble(false);
         return;
       }
+      // Не показываем bubble при выделении image или mwsTable node
+      const { selection } = editor.state;
+      if (selection instanceof NodeSelection) {
+        const nodeName = selection.node?.type?.name;
+        if (nodeName === 'image' || nodeName === 'mwsTable') {
+          setShowBubble(false);
+          return;
+        }
+      }
+      const selectedText = editor.state.doc.textBetween(from, to, ' ').trim();
+      if (!selectedText) {
+        setShowBubble(false);
+        return;
+      }
       const start = editor.view.coordsAtPos(from);
       const end = editor.view.coordsAtPos(to);
       setBubblePos({
@@ -271,8 +484,21 @@ export default function Editor({
         const a = el.closest('a');
         if (!a || !editor.view.dom.contains(a)) return false;
         event.preventDefault();
-        editor.chain().focus().setTextSelection(pos).extendMarkRange('link').run();
-        setTimeout(() => onRequestLinkEdit?.(), 0);
+        // Ctrl/Cmd+клик → открыть редактор ссылки
+        if (event.ctrlKey || event.metaKey) {
+          editor.chain().focus().setTextSelection(pos).extendMarkRange('link').run();
+          setTimeout(() => onRequestLinkEdit?.(), 0);
+          return true;
+        }
+        // Обычный клик → переход по ссылке
+        const href = a.getAttribute('href');
+        if (href) {
+          if (href.startsWith('/')) {
+            window.location.href = href;
+          } else {
+            window.open(href, '_blank', 'noopener,noreferrer');
+          }
+        }
         return true;
       },
       handleKeyDown: (_view, event) => {
@@ -331,6 +557,11 @@ export default function Editor({
         onInsertMwsTable?.();
         return;
       }
+      if (item.id === 'pageLink') {
+        setShowSlash(false);
+        onInsertPageLink?.();
+        return;
+      }
 
       switch (item.id) {
         case 'h1':
@@ -357,6 +588,27 @@ export default function Editor({
         case 'divider':
           editor.chain().focus().setHorizontalRule().run();
           break;
+        case 'image': {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'image/jpeg,image/png,image/gif';
+          input.onchange = async () => {
+            const file = input.files?.[0];
+            if (!file) return;
+            if (file.size > 5 * 1024 * 1024) {
+              alert('Файл слишком большой. Максимум 5 МБ.');
+              return;
+            }
+            try {
+              const url = await api.uploadImage(file);
+              editor.chain().focus().setImage({ src: url }).run();
+            } catch {
+              alert('Не удалось загрузить изображение');
+            }
+          };
+          input.click();
+          break;
+        }
         case 'ai':
           onInsertAiBlock?.();
           break;
@@ -365,7 +617,7 @@ export default function Editor({
       }
       setShowSlash(false);
     },
-    [editor, onInsertMwsTable, onInsertAiBlock, slashPos.x, slashPos.y]
+    [editor, onInsertMwsTable, onInsertPageLink, onInsertAiBlock, slashPos.x, slashPos.y]
   );
 
   const insertGridTable = (rows: number, cols: number) => {
@@ -475,42 +727,46 @@ export default function Editor({
       )}
       {showBubble && (
         <div className="selection-bubble" style={{ left: bubblePos.x, top: bubblePos.y }}>
+          <button className={`bubble-btn${editor.isActive('bold') ? ' active' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => editor.chain().focus().toggleBold().run()}>B</button>
+          <button className={`bubble-btn bubble-italic${editor.isActive('italic') ? ' active' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => editor.chain().focus().toggleItalic().run()}>I</button>
+          <button className={`bubble-btn${editor.isActive('underline') ? ' active' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => editor.chain().focus().toggleUnderline().run()} style={{textDecoration:'underline'}}>U</button>
+          <button className={`bubble-btn${editor.isActive('strike') ? ' active' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => editor.chain().focus().toggleStrike().run()} style={{textDecoration:'line-through'}}>S</button>
+          <div className="bubble-sep" />
+          {/* T = heading cycle */}
           <button
-            className="bubble-btn"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleBold().run()}
+            className={`bubble-btn${editor.isActive('heading') ? ' active' : ''}`}
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => {
+              if (editor.isActive('heading', { level: 1 })) editor.chain().focus().toggleHeading({ level: 2 }).run();
+              else if (editor.isActive('heading', { level: 2 })) editor.chain().focus().toggleHeading({ level: 3 }).run();
+              else if (editor.isActive('heading', { level: 3 })) editor.chain().focus().setParagraph().run();
+              else editor.chain().focus().toggleHeading({ level: 1 }).run();
+            }}
+            title="Заголовок"
           >
-            B
+            T{editor.isActive('heading',{level:1}) ? '¹' : editor.isActive('heading',{level:2}) ? '²' : editor.isActive('heading',{level:3}) ? '³' : ''}
           </button>
+          <div className="bubble-sep" />
+          {/* Alignment dropdown */}
           <button
-            className="bubble-btn"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleItalic().run()}
-          >
-            I
-          </button>
-          <button
-            className="bubble-btn"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleUnderline().run()}
-          >
-            U
-          </button>
-          <button
-            className="bubble-btn"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleCode().run()}
-          >
-            {'</>'}
-          </button>
-          <button
-            className="bubble-btn"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => onRequestLinkEdit?.()}
-            title="Ссылка"
-          >
-            @
-          </button>
+            className={`bubble-btn${bubbleDropdown === 'align' ? ' active' : ''}`}
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => setBubbleDropdown(v => v === 'align' ? null : 'align')}
+            title="Выравнивание"
+          >≡</button>
+          {bubbleDropdown === 'align' && (
+            <div className="bubble-dropdown">
+              {[{id:'left',label:'⬅ Влево'},{id:'center',label:'⬛ По центру'},{id:'right',label:'➡ Вправо'}].map(opt => (
+                <button key={opt.id} className="bubble-dropdown-item" onMouseDown={e => { e.preventDefault(); setBubbleDropdown(null); }}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="bubble-sep" />
+          <button className={`bubble-btn${editor.isActive('link') ? ' active' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => { onRequestLinkEdit?.(); setShowBubble(false); setBubbleDropdown(null); }} title="Ссылка">@</button>
+          <button className={`bubble-btn${editor.isActive('code') ? ' active' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => editor.chain().focus().toggleCode().run()}>{'</>'}</button>
+          <button className={`bubble-btn${editor.isActive('blockquote') ? ' active' : ''}`} onMouseDown={e => e.preventDefault()} onClick={() => editor.chain().focus().toggleBlockquote().run()} title="Цитата">❝</button>
         </div>
       )}
       <EditorContent editor={editor} />

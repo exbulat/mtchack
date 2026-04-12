@@ -1,15 +1,20 @@
-# Build stage
-FROM node:20-bookworm-slim AS builder
+FROM node:20-bookworm-slim AS deps
 
-WORKDIR /build
+WORKDIR /app
 
 RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
+COPY prisma ./prisma
+
+# Делаем установку зависимостей устойчивее к кратковременным сетевым сбоям.
+ENV NPM_CONFIG_FETCH_RETRIES=5 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000
+
 RUN npm ci
 
-COPY prisma ./prisma
-RUN npx prisma generate
+FROM deps AS builder
 
 COPY . .
 RUN npm run build
@@ -20,15 +25,13 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY --from=deps /app/package.json ./package.json
+COPY --from=deps /app/package-lock.json ./package-lock.json
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
 
-COPY --from=builder /build/dist ./dist
-COPY --from=builder /build/prisma ./prisma
-COPY --from=builder /build/node_modules/.prisma ./node_modules/.prisma
-
-# Образ node:20-bookworm-slim уже содержит пользователя node (uid 1000)
-COPY --chown=node:node . .
+RUN mkdir -p /app/uploads && chown node:node /app/uploads
 
 USER node
 

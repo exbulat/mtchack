@@ -1,9 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
 import { AUTH_COOKIE, parseCookieValue, verifyAuthToken } from '../auth-tokens';
 
-export function loadAuthUser(req: Request, _res: Response, next: NextFunction): void {
+export function loadAuthUser(req: Request, res: Response, next: NextFunction): void {
   const raw = parseCookieValue(req.headers.cookie, AUTH_COOKIE);
-  req.authUser = raw ? verifyAuthToken(raw) ?? undefined : undefined;
+  if (raw) {
+    const user = verifyAuthToken(raw);
+    if (user) {
+      req.authUser = user;
+    } else {
+      // Токен есть, но невалидный (истёк или БД сброшена) — сразу чистим куку
+      res.clearCookie(AUTH_COOKIE, { path: '/' });
+    }
+  }
   next();
 }
 

@@ -89,7 +89,7 @@ function extractImageFromMultipart(body: Buffer, contentType: string): { data: B
   return null;
 }
 
-router.get('/static/:filename', async (req: Request, res: Response) => {
+router.get('/static/:filename', requireAuth, async (req: Request, res: Response) => {
   try {
     const filename = req.params.filename ?? '';
     if (!STATIC_NAME_RE.test(filename) || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
@@ -110,7 +110,8 @@ router.get('/static/:filename', async (req: Request, res: Response) => {
     const ext = path.extname(filename);
     const buf = await fs.readFile(resolved);
     res.setHeader('Content-Type', extToContentType(ext));
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.send(buf);
   } catch {
     res.status(500).json({ error: 'Failed to serve file' });

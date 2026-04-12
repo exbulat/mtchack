@@ -155,8 +155,16 @@ router.get('/:dstId/records', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid datasheet ID format' });
     }
     const params = new URLSearchParams();
-    if (req.query.pageSize) params.set('pageSize', req.query.pageSize as string);
-    if (req.query.fieldKey) params.set('fieldKey', req.query.fieldKey as string);
+    const pageSize = validateNumericParam(req.query.pageSize, 500);
+    const fieldKey = validateStringParam(req.query.fieldKey);
+    if (req.query.pageSize && pageSize === null) {
+      return res.status(400).json({ error: 'Invalid pageSize' });
+    }
+    if (req.query.fieldKey && fieldKey === null) {
+      return res.status(400).json({ error: 'Invalid fieldKey' });
+    }
+    if (pageSize !== null) params.set('pageSize', pageSize.toString());
+    if (fieldKey !== null) params.set('fieldKey', fieldKey);
     const qs = params.toString() ? `?${params.toString()}` : '';
     const resp = await fetch(
       `${BASE_URL()}/fusion/v1/datasheets/${encodeURIComponent(dstId)}/records${qs}`,
