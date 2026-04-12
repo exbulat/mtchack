@@ -517,11 +517,12 @@ export default function Editor({
         }
 
         if (event.key === '/') {
+          event.preventDefault();
           const coords = editor.view.coordsAtPos(editor.state.selection.from);
           setSlashPos({ x: coords.left, y: coords.bottom + 8 });
           setSelectedIndex(0);
           setShowSlash(true);
-          return false;
+          return true;
         }
         if (showBubble && event.key === 'Escape') {
           setShowBubble(false);

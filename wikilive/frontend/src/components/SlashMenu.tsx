@@ -29,11 +29,11 @@ export const SLASH_ITEMS: SlashItem[] = [
   // Списки
   { id: 'bullet', label: 'Маркированный список', icon: '•', description: 'Простой список с точками', hotkey: '-', group: 'Списки' },
   { id: 'ordered', label: 'Нумерованный список', icon: '1.', description: 'Список с нумерацией', hotkey: '1.', group: 'Списки' },
-  // Таблицы
+  // Вставка
   { id: 'simpleTable', label: 'Таблица', icon: '⊞', description: 'Простая таблица в документе', group: 'Вставка' },
   { id: 'mwsTable', label: 'Таблица MWS', icon: '📊', description: 'Живая таблица из MWS Tables', group: 'Вставка' },
   { id: 'image', label: 'Изображение', icon: '🖼', description: 'Загрузить изображение с компьютера', group: 'Вставка' },
-  { id: 'pageLink', label: 'Wiki link', icon: '[[', description: 'Link to another page in the workspace', group: 'Р’СЃС‚Р°РІРєР°' },
+  { id: 'pageLink', label: 'Wiki link', icon: '[[', description: 'Link to another page in the workspace', group: 'Вставка' },
   // AI
   { id: 'ai', label: 'AI-блок', icon: '✨', description: 'Сгенерировать текст с помощью ИИ', group: 'Вставка' },
 ];
@@ -48,8 +48,9 @@ export default function SlashMenu({ x, y, selectedIndex, onSelect, onClose, onIn
   }, []);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return SLASH_ITEMS;
-    const q = query.toLowerCase();
+    const normalizedQuery = query.trim().replace(/^\/+/, '').toLowerCase();
+    if (!normalizedQuery) return SLASH_ITEMS;
+    const q = normalizedQuery;
     return SLASH_ITEMS.filter(
       (item) =>
         item.label.toLowerCase().includes(q) ||
@@ -58,7 +59,6 @@ export default function SlashMenu({ x, y, selectedIndex, onSelect, onClose, onIn
     );
   }, [query]);
 
-  // Group items
   const grouped = useMemo(() => {
     const groups: Record<string, SlashItem[]> = {};
     for (const item of filtered) {
@@ -69,15 +69,12 @@ export default function SlashMenu({ x, y, selectedIndex, onSelect, onClose, onIn
     return groups;
   }, [filtered]);
 
-  // Flat list for keyboard navigation
   const flatFiltered = useMemo(() => filtered, [filtered]);
 
-  // Reset index when filter changes
   useEffect(() => {
     onIndexChange?.(0);
   }, [query, onIndexChange]);
 
-  // Scroll selected item into view
   useEffect(() => {
     const el = listRef.current?.querySelector(`[data-idx="${selectedIndex}"]`);
     el?.scrollIntoView({ block: 'nearest' });
@@ -97,6 +94,8 @@ export default function SlashMenu({ x, y, selectedIndex, onSelect, onClose, onIn
     } else if (e.key === 'Escape') {
       e.preventDefault();
       onClose?.();
+    } else if (e.key === '/') {
+      e.preventDefault();
     }
   };
 
@@ -109,11 +108,12 @@ export default function SlashMenu({ x, y, selectedIndex, onSelect, onClose, onIn
       onMouseDown={(e) => e.preventDefault()}
     >
       <div className="slash-menu-search">
+        <span className="slash-menu-search-prefix">/</span>
         <input
           ref={inputRef}
           className="slash-menu-input"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => setQuery(e.target.value.replace(/^\/+/, ''))}
           onKeyDown={handleKeyDown}
           placeholder="Поиск блока…"
         />
