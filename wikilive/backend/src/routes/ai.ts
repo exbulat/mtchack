@@ -1,6 +1,9 @@
 import { Router, Request, Response } from 'express';
+import { requireAuth } from '../middleware/requireAuth';
 
 const router = Router();
+
+router.use(requireAuth);
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -62,7 +65,7 @@ router.post('/chat', async (req: Request, res: Response) => {
     });
 
     if (!resp.ok) {
-      const errorText = await resp.text();
+      await resp.text();
       console.error('[AI] MWS GPT error:', resp.status);
       return res.status(resp.status).json({ error: 'AI service error' });
     }
@@ -99,7 +102,11 @@ router.post('/suggest', async (req: Request, res: Response) => {
       translate_en: `Переведи на английский:\n\n${validatedText}`,
     };
 
-    const prompt = prompts[action] || `${action}:\n\n${validatedText}`;
+    if (typeof action !== 'string' || !prompts[action]) {
+      return res.status(400).json({ error: 'Недопустимое действие. Разрешены: summarize, expand, improve, translate_en' });
+    }
+
+    const prompt = prompts[action];
 
     const resp = await fetch(apiUrl, {
       method: 'POST',

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../index';
 import { AUTH_COOKIE, signAuthToken } from '../auth-tokens';
+import { authLimiter } from '../middleware/rateLimiter';
 const router = Router();
 
 const AVATAR_COLORS = [
@@ -51,13 +52,13 @@ router.get('/me', (req: Request, res: Response) => {
   });
 });
 
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', authLimiter, async (req: Request, res: Response) => {
   try {
     const email = validateEmail(req.body?.email);
     const password = validatePassword(req.body?.password);
     const name = validateName(req.body?.name);
     if (!email || !password || !name) {
-      res.status(400).json({ error: 'Некорректные email, пароль (≥6 символов) или имя' });
+      res.status(400).json({ error: 'Некорректные email, пароль или имя' });
       return;
     }
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -90,7 +91,7 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', authLimiter, async (req: Request, res: Response) => {
   try {
     const email = validateEmail(req.body?.email);
     const password = validatePassword(req.body?.password);
@@ -120,6 +121,49 @@ router.post('/login', async (req: Request, res: Response) => {
     res.json({ user: authUser });
   } catch {
     res.status(500).json({ error: 'Не удалось войти' });
+  }
+});
+
+router.patch('/me', async (req: Request, res: Response) => {
+  if (!req.authUser) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  try {
+    const updates: { name?: string; avatarColor?: string } = {};
+    if (req.body?.name !== undefined) {
+      const name = validateName(req.body.name);
+      if (!name) {
+        res.status(400).json({ error: 'Некорректное имя' });
+        return;
+      }
+      updates.name = name;
+    }
+    if (req.body?.avatarColor !== undefined) {
+      const color = req.body.avatarColor;
+      if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) {
+        res.status(400).json({ error: 'Некорректный цвет' });
+        return;
+      }
+      updates.avatarColor = color;
+    }
+    const user = await prisma.user.update({
+      where: { id: req.authUser.id },
+      data: updates,
+    });
+    const authUser = { id: user.id, email: user.email, name: user.name, avatarColor: user.avatarColor };
+    // обновляем куку
+    const token = signAuthToken(authUser);
+    res.cookie(AUTH_COOKIE, token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+    res.json({ user: authUser });
+  } catch {
+    res.status(500).json({ error: 'Не удалось обновить профиль' });
   }
 });
 

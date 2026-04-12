@@ -3,12 +3,13 @@ import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { HocuspocusProvider } from '@hocuspocus/provider';
+import type { Editor as TiptapEditor, JSONContent } from '@tiptap/core';
 import Backlinks from '../components/Backlinks';
 import Editor from '../components/Editor';
 import SaveStatus from '../components/SaveStatus';
 import { api, PageComment } from '../lib/api';
 import { useAutosave } from '../hooks/useAutosave';
-import { PagesListContext } from '../components/Sidebar';
+import { PagesListContext } from '../components/RightSidebar';
 import { useAuth } from '../context/AuthContext';
 import type { EditorCollab } from '../components/Editor';
 
@@ -19,21 +20,21 @@ export default function PageEditor() {
   const { user, loading: authLoading } = useAuth();
   const pageId = id && id !== 'new' ? id : null;
   const [title, setTitle] = useState('Без названия');
-  const [content, setContent] = useState<any>({ type: 'doc', content: [{ type: 'paragraph' }] });
+  const [content, setContent] = useState<JSONContent>({ type: 'doc', content: [{ type: 'paragraph' }] });
   const [loading, setLoading] = useState(true);
   const [showTableModal, setShowTableModal] = useState(false);
-  const [spaceNodes, setSpaceNodes] = useState<any[]>([]);
+  const [spaceNodes, setSpaceNodes] = useState<Array<{ id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }>>([]);
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [description, setDescription] = useState('');
   const [rightMode, setRightMode] = useState<'comments' | 'timeline' | 'info' | null>('timeline');
-  const [revisions, setRevisions] = useState<any[]>([]);
+  const [revisions, setRevisions] = useState<Array<{ id: string; pageId: string; createdAt: string; content: JSONContent }>>([]);
   const [comments, setComments] = useState<PageComment[]>([]);
   const [commentDraft, setCommentDraft] = useState('');
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
-  const [editorInstance, setEditorInstance] = useState<any | null>(null);
+  const [editorInstance, setEditorInstance] = useState<TiptapEditor | null>(null);
   const [pageMeta, setPageMeta] = useState<{ createdAt?: string; updatedAt?: string }>({});
   const [linkPopover, setLinkPopover] = useState<{
     href: string;
@@ -66,6 +67,8 @@ export default function PageEditor() {
       name: pageId,
       document: ydoc,
       awareness,
+      // Auth happens via HttpOnly cookie — token field just silences the client warning
+      token: 'cookie',
     });
     setCollab({ ydoc, provider });
     return () => {
@@ -75,10 +78,11 @@ export default function PageEditor() {
     };
   }, [pageId, user?.id]);
 
-  const { isSaving, lastSavedAt, saveError, saveNow } = useAutosave({
+  const { isSaving, lastSavedAt, saveError, saveNow, pendingChanges } = useAutosave({
     pageId,
     title,
     content,
+    enabled: !loading,
   });
 
   useEffect(() => {
@@ -134,7 +138,7 @@ export default function PageEditor() {
       try {
         await api.updatePage(pageId, { title });
         bumpPagesList();
-      } catch {}
+      } catch { /* ignore */ }
     }, 500);
     return () => {
       if (titleDebounceRef.current) window.clearTimeout(titleDebounceRef.current);
@@ -149,7 +153,7 @@ export default function PageEditor() {
     let mounted = true;
     api
       .requestRevisions(pageId)
-      .then((data: any) => {
+      .then((data) => {
         if (mounted && Array.isArray(data)) setRevisions(data);
       })
       .catch(() => {
@@ -185,7 +189,7 @@ export default function PageEditor() {
     try {
       await api.updatePage(pageId, { title });
       bumpPagesList();
-    } catch {}
+    } catch { /* ignore */ }
   };
 
   const ensurePageForBlocks = async () => {
@@ -200,7 +204,7 @@ export default function PageEditor() {
     try {
       await ensurePageForBlocks();
       const nodesData = await api.listTables();
-      const nodes = nodesData?.data?.nodes || nodesData?.nodes || [];
+      const nodes = (nodesData?.data?.nodes || nodesData?.nodes || []) as Array<{ id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }>;
       setSpaceNodes(nodes);
       setShowTableModal(true);
     } catch {
@@ -209,9 +213,9 @@ export default function PageEditor() {
     }
   };
 
-  const selectTable = (node: any) => {
-    const dstId = node?.id || node?.nodeId || node?.dstId;
-    const name = node?.name || node?.title || dstId;
+  const selectTable = (node: { id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }) => {
+    const dstId = node.id || node.nodeId || node.dstId;
+    const name = node.name || node.title || dstId;
     if (!dstId) return;
     if (editorInstance) {
       editorInstance
@@ -241,16 +245,16 @@ export default function PageEditor() {
       if (editorInstance) {
         editorInstance.chain().focus().insertContent(res.reply).run();
       } else {
-        setContent((prev: any) => ({
+        setContent((prev: JSONContent) => ({
           ...prev,
           content: [
-            ...(prev?.content || []),
+            ...(prev.content || []),
             { type: 'paragraph', content: [{ type: 'text', text: res.reply }] },
           ],
         }));
       }
       setAiPrompt('');
-    } catch {} finally {
+    } catch { /* ignore */ } finally {
       setAiLoading(false);
     }
   };
@@ -291,13 +295,13 @@ export default function PageEditor() {
         const allowedProtocols = ['http:', 'https:', 'mailto:', 'ftp:', 'ftps:'];
         if (!allowedProtocols.includes(protocol) && !href.startsWith('/')) {
           console.warn('[Security] Blocked unsafe URL protocol:', protocol);
-          alert('Only HTTP, HTTPS, mailto, and FTP links are allowed');
+          alert('Разрешены только HTTP, HTTPS, mailto и FTP ссылки');
           return;
         }
       } catch {
         if (!href.startsWith('/')) {
           console.warn('[Security] Invalid URL format:', href);
-          alert('Please enter a valid URL');
+          alert('Введите корректный URL');
           return;
         }
       }
@@ -502,7 +506,7 @@ export default function PageEditor() {
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Краткое описание (необязательно)"
             />
-            <SaveStatus isSaving={isSaving} lastSavedAt={lastSavedAt} error={saveError} />
+            <SaveStatus isSaving={isSaving} lastSavedAt={lastSavedAt} error={saveError} pendingChanges={pendingChanges} />
             <Editor
               key={pageId ? `${pageId}-${collab ? 'y' : 'n'}` : 'draft'}
               content={content}
@@ -551,9 +555,9 @@ export default function PageEditor() {
                   <div key={comment.id} className="comment-card">
                     <div className="comment-topline">
                       <div className="comment-user">
-                        <span className="comment-avatar">{(comment.authorId || 'В')[0]}</span>
+                        <span className="comment-avatar">{(comment.authorName || 'В')[0]}</span>
                         <div>
-                          <div className="comment-author">{comment.authorId || 'Вы'}</div>
+                          <div className="comment-author">{comment.authorName || 'Вы'}</div>
                           <div className="comment-time">
                             {new Date(comment.createdAt).toLocaleString('ru-RU')}
                           </div>
@@ -762,7 +766,7 @@ export default function PageEditor() {
   );
 }
 
-function extractText(node: any): string {
+function extractText(node: JSONContent | JSONContent[] | string | undefined): string {
   if (!node) return '';
   if (typeof node === 'string') return node;
   if (Array.isArray(node)) return node.map(extractText).join(' ');
@@ -771,7 +775,7 @@ function extractText(node: any): string {
   return '';
 }
 
-function countWords(content: any): number {
+function countWords(content: JSONContent): number {
   const plain = extractText(content).trim();
   if (!plain) return 0;
   return plain.split(/\s+/).filter(Boolean).length;

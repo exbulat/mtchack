@@ -35,7 +35,7 @@ export default function Register() {
     <div className="auth-page">
       <div className="auth-card">
         <h1>Регистрация</h1>
-        <p className="auth-hint">Открытая регистрация для демо и жюри.</p>
+        
         <form onSubmit={onSubmit} className="auth-form">
           <label>
             Имя (видно в комментариях и курсорах)

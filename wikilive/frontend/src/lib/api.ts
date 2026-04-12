@@ -45,6 +45,7 @@ export interface PageComment {
   pageId: string;
   text: string;
   authorId: string;
+  authorName: string;
   blockId: string;
   resolved: boolean;
   createdAt: string;
@@ -57,7 +58,26 @@ export interface AuthUser {
   avatarColor: string;
 }
 
-/** MWS tables API: то обёртка `{ data: ... }`, то плоский JSON */
+export interface SpaceSummary {
+  id: string;
+  name: string;
+  icon?: string;
+  color?: string;
+  ownerId: string;
+  createdAt: string;
+  myRole: string;
+}
+
+export interface SpaceMemberFull {
+  id: string;
+  spaceId: string;
+  userId: string;
+  role: string;
+  invitedAt: string;
+  user: { id: string; name: string; email: string; avatarColor: string };
+}
+
+// MWS tables API: то обёртка `{ data: ... }`, то плоский JSON
 type MwsFieldsResponse = { data?: { fields?: unknown[] }; fields?: unknown[] };
 type MwsRecordsResponse = { data?: { records?: unknown[] }; records?: unknown[] };
 type MwsNodesResponse = { data?: { nodes?: unknown[] }; nodes?: unknown[] };
@@ -196,4 +216,56 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text, action }),
     }),
+
+  createSpace: (data: { name?: string }) =>
+    request<{ id: string; name: string; color: string; ownerId: string }>(`/spaces`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getSpacePages: (spaceId: string) =>
+    request<PageSummary[]>(`/spaces/${spaceId}/pages`),
+
+  createSpacePage: (spaceId: string, data: { title?: string; content?: Record<string, unknown>; icon?: string }) =>
+    request<Page>(`/spaces/${spaceId}/pages`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateMe: (data: { name?: string; avatarColor?: string }) =>
+    request<{ user: AuthUser }>('/auth/me', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  getMySpaces: () => request<SpaceSummary[]>('/spaces/mine'),
+
+  getSpaceMembers: (spaceId: string) =>
+    request<SpaceMemberFull[]>(`/spaces/${spaceId}/members`),
+
+  inviteMember: (spaceId: string, data: { email: string; role: string }) =>
+    request<SpaceMemberFull>(`/spaces/${spaceId}/members`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateMemberRole: (spaceId: string, userId: string, role: string) =>
+    request<SpaceMemberFull>(`/spaces/${spaceId}/members/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    }),
+
+  removeMember: (spaceId: string, userId: string) =>
+    request<{ ok: boolean }>(`/spaces/${spaceId}/members/${userId}`, {
+      method: 'DELETE',
+    }),
+
+  renameSpace: (spaceId: string, name: string) =>
+    request<{ id: string; name: string }>(`/spaces/${spaceId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
+  deleteSpace: (spaceId: string) =>
+    request<{ ok: boolean }>(`/spaces/${spaceId}`, { method: 'DELETE' }),
 };

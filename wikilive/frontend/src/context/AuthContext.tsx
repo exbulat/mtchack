@@ -42,9 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     try {
       await api.logout();
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
     setUser(null);
   }, []);
 
@@ -58,6 +56,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth(): AuthState {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth outside AuthProvider');
+  if (!ctx) throw new Error('useAuth вне AuthProvider');
   return ctx;
 }
