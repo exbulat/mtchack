@@ -3,7 +3,8 @@ services:
     container_name: postgres
     image: postgres:16-alpine
     restart: unless-stopped
-    # без внешних портов — доступ только из внутренней сети Docker
+    ports:
+      - '5432:5432'
     environment:
       # задайте POSTGRES_PASSWORD в .env перед запуском
       POSTGRES_USER: ${POSTGRES_USER:-wikilive}
