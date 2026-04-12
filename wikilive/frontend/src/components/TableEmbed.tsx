@@ -287,7 +287,6 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
                     onClick={() => { setShowNewRow(false); setNewRowValues({}); }}
                     title="Отмена"
                   >
-                    ✕
                   </button>
                 </td>
               </tr>
