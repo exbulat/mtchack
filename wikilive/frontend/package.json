@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
     "@hocuspocus/provider": "^2.15.3",
@@ -33,11 +35,15 @@
     "yjs": "^13.6.15"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/d3": "^7.4.3",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "eslint": "^10.2.0",
+    "eslint-plugin-security": "^4.0.0",
     "typescript": "^5.4.5",
-    "vite": "^5.4.14"
+    "typescript-eslint": "^8.58.1",
+    "vite": "^6.4.2"
   }
 }

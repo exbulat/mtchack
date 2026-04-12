@@ -3,11 +3,11 @@ services:
     container_name: postgres
     image: postgres:16-alpine
     restart: unless-stopped
-    ports:
-      - '5432:5432'
+    # без внешних портов — доступ только из внутренней сети Docker
     environment:
+      # задайте POSTGRES_PASSWORD в .env перед запуском
       POSTGRES_USER: ${POSTGRES_USER:-wikilive}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wikilive_secure_min_12_chars}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wikilive_dev_password_123}
       POSTGRES_DB: ${POSTGRES_DB:-wikilive}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -25,7 +25,8 @@ services:
       - '3001:3001'
       - '3002:3002'
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-wikilive}:${POSTGRES_PASSWORD:-wikilive_secure_min_12_chars}@postgres:5432/wikilive
+      # COOKIE_SECRET и POSTGRES_PASSWORD должны быть заданы в .env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wikilive}:${POSTGRES_PASSWORD}@postgres:5432/wikilive
       MWS_TABLES_BASE_URL: ${MWS_TABLES_BASE_URL:-https://tables.mws.ru}
       MWS_TABLES_TOKEN: ${MWS_TABLES_TOKEN:-}
       MWS_TABLES_SPACE_ID: ${MWS_TABLES_SPACE_ID:-}
@@ -34,7 +35,7 @@ services:
       PORT: 3001
       WS_PORT: 3002
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
-      COOKIE_SECRET: ${COOKIE_SECRET:-wikilive-dev-cookie-secret-change-me}
+      COOKIE_SECRET: ${COOKIE_SECRET:-dev_cookie_secret_change_in_production_12345}
     depends_on:
       postgres:
         condition: service_healthy

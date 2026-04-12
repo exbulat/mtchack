@@ -14,6 +14,11 @@ model User {
   name         String
   avatarColor  String   @default("#6366f1")
   createdAt    DateTime @default(now())
+
+  pages Page[]
+  spaces       Space[]       @relation("SpaceOwner")
+  spaceMembers SpaceMember[] @relation("SpaceMemberUser")
+  ownedFiles   File[]        @relation("FileOwner")
 }
 
 model Page {
@@ -21,10 +26,14 @@ model Page {
   title     String    @default("Без названия")
   content   Json      @default("{}")
   icon      String    @default("")
+  ownerId   String?
+  spaceId   String?   @map("space_id")
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime? @map("deleted_at")
 
+  owner         User?          @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  space         Space?         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   outgoingLinks PageLink[]     @relation("source")
   incomingLinks PageLink[]     @relation("target")
   revisions     PageRevision[]
@@ -61,4 +70,70 @@ model Comment {
   createdAt DateTime @default(now())
 
   page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+}
+
+model Space {
+  id        String       @id @default(uuid())
+  name      String
+  icon      String?
+  color     String       @default("#7C3AED")
+  ownerId   String       @map("owner_id")
+  owner     User         @relation("SpaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt
+  deletedAt DateTime?    @map("deleted_at")
+  members   SpaceMember[]
+  files     File[]
+  pages     Page[]
+
+  @@map("spaces")
+}
+
+model SpaceMember {
+  id        String     @id @default(uuid())
+  spaceId   String
+  userId    String
+  role      SpaceRole  @default(READER)
+  invitedAt DateTime   @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user  User  @relation("SpaceMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([spaceId, userId], name: "space_user_idx")
+}
+
+model File {
+  id        String     @id @default(uuid())
+  spaceId   String
+  title     String     @default("Untitled")
+  content   Json       @default("{}")
+  ownerId   String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  space     Space      @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  owner     User?      @relation("FileOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  views     View[]
+}
+
+model View {
+  id     String   @id @default(uuid())
+  fileId String
+  type   ViewType
+  name   String?
+  config Json?
+  file   File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+}
+
+enum SpaceRole {
+  OWNER
+  ADMIN
+  EDITOR
+  READER
+}
+
+enum ViewType {
+  TABLE
+  KANBAN
+  CALENDAR
+  GANTT
 }

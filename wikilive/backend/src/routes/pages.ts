@@ -23,51 +23,54 @@ function validateIcon(icon: unknown): string {
   return '';
 }
 
-router.get('/', async (_req: Request, res: Response) => {
+
+router.get('/', requireAuth, async (req: Request, res: Response) => {
   try {
     const pages = await prisma.page.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, ownerId: req.authUser!.id },
       orderBy: { updatedAt: 'desc' },
       select: { id: true, title: true, icon: true, updatedAt: true },
     });
     res.json(pages);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch pages' });
   }
 });
 
-router.get('/meta/trash', async (_req: Request, res: Response) => {
+router.get('/meta/trash', requireAuth, async (req: Request, res: Response) => {
   try {
     const pages = await prisma.page.findMany({
-      where: { deletedAt: { not: null } },
+      where: { deletedAt: { not: null }, ownerId: req.authUser!.id },
       orderBy: { deletedAt: 'desc' },
       select: { id: true, title: true, icon: true, deletedAt: true },
     });
     res.json(pages);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch trash' });
   }
 });
 
-router.get('/meta/graph', async (_req: Request, res: Response) => {
+router.get('/meta/graph', requireAuth, async (req: Request, res: Response) => {
   try {
     const pages = await prisma.page.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, ownerId: req.authUser!.id },
       select: { id: true, title: true, icon: true },
     });
+    const pageIds = pages.map((p) => p.id);
     const links = await prisma.pageLink.findMany({
+      where: { OR: [{ sourceId: { in: pageIds } }, { targetId: { in: pageIds } }] },
       select: { sourceId: true, targetId: true },
     });
     res.json({
       nodes: pages.map((p) => ({ id: p.id, title: p.title, icon: p.icon })),
       edges: links.map((l) => ({ source: l.sourceId, target: l.targetId })),
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch graph' });
   }
 });
 
-router.get('/meta/search', async (req: Request, res: Response) => {
+router.get('/meta/search', requireAuth, async (req: Request, res: Response) => {
   try {
     let q = (req.query.q as string) || '';
     const MAX_SEARCH_LENGTH = 200;
@@ -77,12 +80,12 @@ router.get('/meta/search', async (req: Request, res: Response) => {
     q = q.trim();
     
     const pages = await prisma.page.findMany({
-      where: { title: { contains: q, mode: 'insensitive' }, deletedAt: null },
+      where: { title: { contains: q, mode: 'insensitive' }, deletedAt: null, ownerId: req.authUser!.id },
       select: { id: true, title: true, icon: true },
       take: 10,
     });
     res.json(pages);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to search pages' });
   }
 });
@@ -105,33 +108,50 @@ router.patch('/comments/:commentId', requireAuth, async (req: Request, res: Resp
     if (resolved !== undefined && typeof resolved !== 'boolean') {
       return res.status(400).json({ error: 'Resolved must be a boolean' });
     }
-    
+
+    const commentId = req.params.commentId!;
+    const existing = await prisma.comment.findUnique({ where: { id: commentId } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
+    if (existing.authorId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на изменение этого комментария' });
+    }
+
     const updated = await prisma.comment.update({
-      where: { id: req.params.commentId },
+      where: { id: commentId },
       data: {
         ...(text !== undefined && { text: text.trim() }),
         ...(resolved !== undefined && { resolved: Boolean(resolved) }),
       },
     });
     res.json(updated);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to update comment' });
   }
 });
 
 router.delete('/comments/:commentId', requireAuth, async (req: Request, res: Response) => {
   try {
-    await prisma.comment.delete({ where: { id: req.params.commentId } });
+    const commentId = req.params.commentId!;
+    const existing = await prisma.comment.findUnique({ where: { id: commentId } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
+    if (existing.authorId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на удаление этого комментария' });
+    }
+    await prisma.comment.delete({ where: { id: commentId } });
     res.json({ success: true });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to delete comment' });
   }
 });
 
-router.get('/:id', async (req: Request, res: Response) => {
+router.get('/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const page = await prisma.page.findFirst({
-      where: { id: req.params.id, deletedAt: null },
+      where: { id: req.params.id!, deletedAt: null },
       include: {
         incomingLinks: {
           include: { source: { select: { id: true, title: true, icon: true } } },
@@ -139,8 +159,11 @@ router.get('/:id', async (req: Request, res: Response) => {
       },
     });
     if (!page) return res.status(404).json({ error: 'Page not found' });
+    if (page.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на просмотр этой страницы' });
+    }
     res.json(page);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch page' });
   }
 });
@@ -155,15 +178,17 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
     }
     const validIcon = validateIcon(icon);
 
-    const page = await prisma.page.create({
-      data: {
-        title: validTitle,
-        content: validContent,
-        icon: validIcon,
-      },
-    });
+    const payload: { title: string; icon: string; ownerId: string; content?: Prisma.InputJsonValue } = {
+      title: validTitle,
+      icon: validIcon,
+      ownerId: req.authUser!.id,
+    };
+    if (validContent !== null) {
+      payload.content = validContent as Prisma.InputJsonValue;
+    }
+    const page = await prisma.page.create({ data: payload });
     res.status(201).json(page);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to create page' });
   }
 });
@@ -172,119 +197,152 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { title, content, icon } = req.body;
     const existing = await prisma.page.findFirst({
-      where: { id: req.params.id, deletedAt: null },
+      where: { id: req.params.id!, deletedAt: null },
     });
     if (!existing) return res.status(404).json({ error: 'Page not found' });
+    if (existing.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на редактирование этой страницы' });
+    }
     if (title !== undefined) {
       const validTitle = validateTitle(title);
       if (validTitle === null) {
         return res.status(400).json({ error: 'Title must be 1-500 characters' });
       }
     }
+    const updateData: Record<string, Prisma.InputJsonValue | string> = {
+      ...(icon !== undefined && { icon: icon }),
+      ...(title !== undefined && { title: validateTitle(title) || 'Без названия' }),
+    };
     if (content !== undefined) {
       const validContent = validateContent(content);
       if (validContent === null) {
         return res.status(400).json({ error: 'Content must be a valid object' });
       }
+      updateData.content = validContent as Prisma.InputJsonValue;
     }
-
     await prisma.pageRevision.create({
       data: {
-        pageId: req.params.id,
+        pageId: req.params.id!,
         content: existing.content as Prisma.InputJsonValue,
       },
     });
 
     const page = await prisma.page.update({
-      where: { id: req.params.id },
-      data: {
-        ...(title !== undefined && { title: validateTitle(title) || 'Без названия' }),
-        ...(content !== undefined && {
-          content: (validateContent(content) || {}) as Prisma.InputJsonValue,
-        }),
-        ...(icon !== undefined && { icon: validateIcon(icon) }),
-      },
+      where: { id: req.params.id! },
+      data: updateData,
     });
 
     if (content) {
-      await syncPageLinks(req.params.id, content);
+      await syncPageLinks(req.params.id!, content);
     }
 
     res.json(page);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to update page' });
   }
 });
 
 router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
   try {
-    const result = await prisma.page.updateMany({
-      where: { id: req.params.id, deletedAt: null },
-      data: { deletedAt: new Date() },
+    const existing = await prisma.page.findFirst({
+      where: { id: req.params.id!, deletedAt: null },
     });
-    if (result.count === 0) {
+    if (!existing) {
       return res.status(404).json({ error: 'Page not found or already in trash' });
     }
+    if (existing.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на удаление этой страницы' });
+    }
+    await prisma.page.update({
+      where: { id: req.params.id! },
+      data: { deletedAt: new Date() },
+    });
     res.json({ success: true });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to delete page' });
   }
 });
 
 router.post('/:id/restore', requireAuth, async (req: Request, res: Response) => {
   try {
-    const result = await prisma.page.updateMany({
-      where: { id: req.params.id, deletedAt: { not: null } },
-      data: { deletedAt: null },
+    const existing = await prisma.page.findFirst({
+      where: { id: req.params.id!, deletedAt: { not: null } },
     });
-    if (result.count === 0) {
+    if (!existing) {
       return res.status(404).json({ error: 'Page not found or not in trash' });
     }
+    if (existing.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на восстановление этой страницы' });
+    }
+    await prisma.page.update({
+      where: { id: req.params.id! },
+      data: { deletedAt: null },
+    });
     res.json({ success: true });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to restore page' });
   }
 });
 
 router.delete('/:id/permanent', requireAuth, async (req: Request, res: Response) => {
   try {
-    await prisma.page.delete({ where: { id: req.params.id } });
+    const existing = await prisma.page.findUnique({ where: { id: req.params.id! } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    if (existing.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на удаление этой страницы' });
+    }
+    await prisma.page.delete({ where: { id: req.params.id! } });
     res.json({ success: true });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to permanently delete page' });
   }
 });
 
-router.get('/:id/backlinks', async (req: Request, res: Response) => {
+router.get('/:id/backlinks', requireAuth, async (req: Request, res: Response) => {
   try {
+    const page = await prisma.page.findFirst({ where: { id: req.params.id!, deletedAt: null } });
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    if (page.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на просмотр этой страницы' });
+    }
     const links = await prisma.pageLink.findMany({
-      where: { targetId: req.params.id },
+      where: { targetId: req.params.id! },
       include: { source: { select: { id: true, title: true, icon: true } } },
     });
     res.json(links.map((l) => l.source));
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch backlinks' });
   }
 });
 
-router.get('/:id/revisions', async (req: Request, res: Response) => {
+router.get('/:id/revisions', requireAuth, async (req: Request, res: Response) => {
   try {
+    const page = await prisma.page.findFirst({ where: { id: req.params.id!, deletedAt: null } });
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    if (page.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на просмотр ревизий этой страницы' });
+    }
     const revisions = await prisma.pageRevision.findMany({
       where: { pageId: req.params.id },
       orderBy: { createdAt: 'desc' },
       take: 20,
     });
     res.json(revisions);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch revisions' });
   }
 });
 
 router.post('/:id/revisions/:revisionId/restore', requireAuth, async (req: Request, res: Response) => {
   try {
-    const page = await prisma.page.findUnique({ where: { id: req.params.id } });
-    const revision = await prisma.pageRevision.findUnique({ where: { id: req.params.revisionId } });
-    if (!page || !revision || revision.pageId !== page.id) {
+    const page = await prisma.page.findUnique({ where: { id: req.params.id! } });
+    if (!page || page.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на восстановление ревизий этой страницы' });
+    }
+    const revision = await prisma.pageRevision.findUnique({ where: { id: req.params.revisionId! } });
+    if (!revision || revision.pageId !== page.id) {
       return res.status(404).json({ error: 'Revision not found' });
     }
 
@@ -305,33 +363,53 @@ router.post('/:id/revisions/:revisionId/restore', requireAuth, async (req: Reque
       await syncPageLinks(page.id, revJson as Record<string, unknown>);
     }
     res.json(updated);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to restore revision' });
   }
 });
 
 router.delete('/:id/revisions/:revisionId', requireAuth, async (req: Request, res: Response) => {
   try {
-    const revision = await prisma.pageRevision.findUnique({ where: { id: req.params.revisionId } });
-    if (!revision || revision.pageId !== req.params.id) {
+    const page = await prisma.page.findUnique({ where: { id: req.params.id! } });
+    if (!page || page.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на удаление ревизий этой страницы' });
+    }
+    const revision = await prisma.pageRevision.findUnique({ where: { id: req.params.revisionId! } });
+    if (!revision || revision.pageId !== req.params.id!) {
       return res.status(404).json({ error: 'Revision not found' });
     }
-    await prisma.pageRevision.delete({ where: { id: req.params.revisionId } });
+    await prisma.pageRevision.delete({ where: { id: req.params.revisionId! } });
     res.json({ success: true });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to delete revision' });
   }
 });
 
-router.get('/:id/comments', async (req: Request, res: Response) => {
+router.get('/:id/comments', requireAuth, async (req: Request, res: Response) => {
   try {
+    const page = await prisma.page.findFirst({ where: { id: req.params.id!, deletedAt: null } });
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    if (page.ownerId !== req.authUser!.id) {
+      return res.status(403).json({ error: 'Нет прав на просмотр комментариев этой страницы' });
+    }
     const comments = await prisma.comment.findMany({
-      where: { pageId: req.params.id },
+      where: { pageId: req.params.id! },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
-    res.json(comments);
-  } catch (err) {
+    // подцепляем имена авторов
+    const authorIds = [...new Set(comments.map((c) => c.authorId).filter(Boolean))];
+    const authors = await prisma.user.findMany({
+      where: { id: { in: authorIds } },
+      select: { id: true, name: true },
+    });
+    const nameMap = new Map(authors.map((u) => [u.id, u.name]));
+    const enriched = comments.map((c) => ({
+      ...c,
+      authorName: nameMap.get(c.authorId) || c.authorId,
+    }));
+    res.json(enriched);
+  } catch {
     res.status(500).json({ error: 'Failed to fetch comments' });
   }
 });
@@ -340,7 +418,6 @@ router.post('/:id/comments', requireAuth, async (req: Request, res: Response) =>
   try {
     const { text, blockId } = req.body;
     
-    // Validate text
     if (!text || !String(text).trim()) {
       return res.status(400).json({ error: 'Comment text is required' });
     }
@@ -350,13 +427,11 @@ router.post('/:id/comments', requireAuth, async (req: Request, res: Response) =>
       return res.status(400).json({ error: 'Comment text too long (max 5000 characters)' });
     }
     
-    // Validate blockId format if provided
     let validatedBlockId = '';
     if (blockId) {
       if (typeof blockId !== 'string') {
         return res.status(400).json({ error: 'Invalid blockId format' });
       }
-      // Only alphanumeric, hyphens, underscores
       if (!/^[a-zA-Z0-9_-]{1,100}$/.test(blockId)) {
         return res.status(400).json({ error: 'Invalid blockId format' });
       }
@@ -365,19 +440,19 @@ router.post('/:id/comments', requireAuth, async (req: Request, res: Response) =>
     
     const comment = await prisma.comment.create({
       data: {
-        pageId: req.params.id,
+        pageId: req.params.id!,
         text: trimmedText,
-        authorId: req.authUser!.name,
+        authorId: req.authUser!.id,
         blockId: validatedBlockId,
       },
     });
-    res.status(201).json(comment);
-  } catch (err) {
+    res.status(201).json({ ...comment, authorName: req.authUser!.name });
+  } catch {
     res.status(500).json({ error: 'Failed to create comment' });
   }
 });
 
-// исходящие ссылки на другие страницы вытаскиваем из prosemirror-json и пишем в page_link
+// вытаскиваем ссылки из контента и синхронизируем с базой
 async function syncPageLinks(sourceId: string, content: Record<string, unknown>): Promise<void> {
   const targetIds = extractPageLinks(content);
 
@@ -391,12 +466,7 @@ async function syncPageLinks(sourceId: string, content: Record<string, unknown>)
   }
 }
 
-/**
- * SECURITY: Extract page links with protection against:
- * - Stack overflow from deep recursion
- * - Exponential time complexity from circular references
- * - Memory exhaustion from huge result sets
- */
+// рекурсивно ищем pageId в JSON-дереве с защитой от бесконечной рекурсии
 interface ExtractLinksContext {
   ids: Set<string>;
   depth: number;
@@ -409,8 +479,8 @@ function extractPageLinks(node: unknown): string[] {
   const context: ExtractLinksContext = {
     ids: new Set(),
     depth: 0,
-    maxDepth: 100, // Prevent stack overflow
-    maxResults: 1000, // Limit result size
+    maxDepth: 100,
+    maxResults: 1000,
     visited: new WeakSet(),
   };
 
@@ -419,13 +489,11 @@ function extractPageLinks(node: unknown): string[] {
 }
 
 function extractPageLinksRecursive(node: unknown, context: ExtractLinksContext): void {
-  // Stop if we've hit depth limit (prevent stack overflow)
   if (context.depth > context.maxDepth) {
     console.warn('[Security] extractPageLinks: max depth exceeded, stopping recursion');
     return;
   }
 
-  // Stop if we've hit result limit (prevent memory exhaustion)
   if (context.ids.size >= context.maxResults) {
     console.warn('[Security] extractPageLinks: max results limit reached');
     return;
@@ -433,7 +501,6 @@ function extractPageLinksRecursive(node: unknown, context: ExtractLinksContext):
 
   if (!node) return;
 
-  // Protect against circular references and revisiting
   if (typeof node === 'object' && node !== null) {
     if (context.visited.has(node as object)) {
       return;
@@ -441,10 +508,9 @@ function extractPageLinksRecursive(node: unknown, context: ExtractLinksContext):
     context.visited.add(node as object);
   }
 
-  // Type assertions for object iteration
   const nodeObj = node as Record<string, unknown>;
 
-  // Extract pageId if this is a pageLink node
+  // вытаскиваем pageId из ноды pageLink
   if (nodeObj.type === 'pageLink' && typeof nodeObj.attrs === 'object' && nodeObj.attrs !== null) {
     const attrs = nodeObj.attrs as Record<string, unknown>;
     if (typeof attrs.pageId === 'string') {
@@ -452,7 +518,6 @@ function extractPageLinksRecursive(node: unknown, context: ExtractLinksContext):
     }
   }
 
-  // Recurse into content array
   if (Array.isArray(nodeObj.content)) {
     context.depth++;
     for (const child of nodeObj.content) {

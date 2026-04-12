@@ -1,6 +1,6 @@
 import { useContext, useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { PagesListContext } from '../components/Sidebar';
+import { PagesListContext } from '../components/RightSidebar';
 
 interface TrashItem {
   id: string;

@@ -6,10 +6,13 @@ import cookieParser from 'cookie-parser';
 import { Server as HocuspocusServer } from '@hocuspocus/server';
 import { PrismaClient } from '@prisma/client';
 import pagesRouter from './routes/pages';
+import spacesRouter from './routes/spaces';
+import filesRouter from './routes/files';
 import tablesRouter from './routes/tables';
 import aiRouter from './routes/ai';
 import authRouter from './routes/auth';
 import { loadAuthUser } from './middleware/requireAuth';
+import { csrfOriginCheck } from './middleware/csrfOrigin';
 import { AUTH_COOKIE, parseCookieValue, verifyAuthToken } from './auth-tokens';
 import {
   globalLimiter,
@@ -25,11 +28,32 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const WS_PORT = parseInt(process.env.WS_PORT || '3002', 10);
 
+// доверяем первому прокси (nginx в docker-compose)
+app.set('trust proxy', 1);
+
 app.use(helmet());
+app.use(
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'", `ws://localhost:${WS_PORT}`, `ws://${process.env.ALLOWED_ORIGIN?.replace(/^https?:\/\//, '') ?? 'localhost:3002'}`],
+      frameAncestors: ["'none'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  })
+);
 app.disable('x-powered-by');
 
 app.use(cookieParser());
 app.use(loadAuthUser);
+
+// CSRF-защита на write-операциях
+app.use(csrfOriginCheck);
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'http://localhost:3000').split(',');
 app.use(
@@ -41,15 +65,15 @@ app.use(
   })
 );
 
-// Body parsing with limits
+// парсинг JSON с лимитом
 app.use(express.json({ limit: '10mb' }));
 
-// Global rate limiter (100 requests per 15 minutes)
+// глобальный рейт-лимитер
 app.use(globalLimiter);
 
 app.use('/api/auth', authRouter);
 
-// Apply specific rate limiters to routes
+// рейт-лимитеры по маршрутам
 app.use('/api/pages', writeLimiter);
 app.use('/api/pages/meta/search', searchLimiter);
 app.use('/api/tables', tablesLimiter);
@@ -58,6 +82,8 @@ app.use('/api/ai', aiLimiter);
 app.use('/api/pages', pagesRouter);
 app.use('/api/tables', tablesRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api/spaces', spacesRouter);
+app.use('/api/files', filesRouter);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
@@ -66,7 +92,7 @@ app.get('/api/health', (_req, res) => {
 const hocuspocus = HocuspocusServer.configure({
   port: WS_PORT,
   quiet: true,
-  async onAuthenticate({ requestHeaders, connection }) {
+  async onAuthenticate({ requestHeaders, connection, documentName }) {
     const cookieHeader =
       typeof requestHeaders.cookie === 'string' ? requestHeaders.cookie : undefined;
     const token = parseCookieValue(cookieHeader, AUTH_COOKIE);
@@ -76,6 +102,14 @@ const hocuspocus = HocuspocusServer.configure({
     const user = verifyAuthToken(token);
     if (!user) {
       throw new Error('Unauthorized');
+    }
+    // проверяем что страница принадлежит пользователю
+    const pageId = documentName;
+    if (pageId) {
+      const page = await prisma.page.findUnique({ where: { id: pageId }, select: { ownerId: true } });
+      if (!page || page.ownerId !== user.id) {
+        throw new Error('Forbidden: not your page');
+      }
     }
     connection.isAuthenticated = true;
     return { user: { name: user.name, color: user.avatarColor } };

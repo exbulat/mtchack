@@ -12,7 +12,11 @@ export type AuthUser = {
 export type JwtAuthPayload = AuthUser & { sub: string };
 
 export function getJwtSecret(): string {
-  return process.env.COOKIE_SECRET || 'dev-only-change-in-production';
+  const secret = process.env.COOKIE_SECRET;
+  if (!secret) {
+    throw new Error('COOKIE_SECRET environment variable is required. Set it before starting the server.');
+  }
+  return secret;
 }
 
 export function signAuthToken(user: AuthUser): string {
