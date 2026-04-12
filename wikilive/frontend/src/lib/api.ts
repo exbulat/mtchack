@@ -175,8 +175,10 @@ export const api = {
 
   getNode: (nodeId: string) => request<Record<string, unknown>>(`/tables/nodes/${nodeId}`),
 
+  // fieldKey=id: ключи в record.fields совпадают с id полей из /fields (TableEmbed индексирует ячейки по field.id).
+  // При fieldKey=name MWS отдаёт объекты с ключами по имени колонки — тогда rowFields[field.id] всегда пусто.
   getRecords: (dstId: string, pageSize = 100) =>
-    request<MwsRecordsResponse>(`/tables/datasheets/${dstId}/records?pageSize=${pageSize}&fieldKey=name`),
+    request<MwsRecordsResponse>(`/tables/datasheets/${dstId}/records?pageSize=${pageSize}&fieldKey=id`),
 
   createRecords: (dstId: string, body: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/tables/datasheets/${dstId}/records`, {

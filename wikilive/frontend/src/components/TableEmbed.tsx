@@ -23,6 +23,23 @@ interface TableEmbedProps {
 
 const PAGE_SIZE = 50;
 
+/** MWS Fusion часто отдаёт не строку, а объект (rich text, select, ссылка и т.д.). */
+function mwsCellDisplayValue(raw: unknown): string {
+  if (raw == null) return '';
+  if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
+  if (Array.isArray(raw)) {
+    return raw.map(mwsCellDisplayValue).filter((s) => s.length > 0).join(', ');
+  }
+  if (typeof raw === 'object') {
+    const o = raw as Record<string, unknown>;
+    if (typeof o.text === 'string') return o.text;
+    if (typeof o.name === 'string') return o.name;
+    if (typeof o.title === 'string') return o.title;
+    if (o.cellValue !== undefined) return mwsCellDisplayValue(o.cellValue);
+  }
+  return '';
+}
+
 export default function TableEmbed({ dstId, title }: TableEmbedProps) {
   const [fields, setFields] = useState<MwsField[]>([]);
   const [records, setRecords] = useState<MwsRecord[]>([]);
@@ -93,13 +110,15 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
     if (filterText.trim()) {
       const lower = filterText.toLowerCase();
       result = result.filter((r) =>
-        Object.values(r.fields || {}).some((v) => String(v ?? '').toLowerCase().includes(lower))
+        Object.values(r.fields || {}).some((v) =>
+          mwsCellDisplayValue(v).toLowerCase().includes(lower)
+        )
       );
     }
     if (sortField) {
       result = [...result].sort((a, b) => {
-        const av = String((a.fields || {})[sortField] ?? '');
-        const bv = String((b.fields || {})[sortField] ?? '');
+        const av = mwsCellDisplayValue((a.fields || {})[sortField]);
+        const bv = mwsCellDisplayValue((b.fields || {})[sortField]);
         return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
       });
     }
@@ -288,8 +307,9 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
                     return (
                       <td key={cellKey} className={isSaving ? 'table-embed-cell--saving' : ''}>
                         <input
+                          key={`${cellKey}:${mwsCellDisplayValue(rowFields[field.id])}`}
                           className="table-embed-cell-input"
-                          defaultValue={String(rowFields[field.id] ?? '')}
+                          defaultValue={mwsCellDisplayValue(rowFields[field.id])}
                           onBlur={(e) => updateCell(recordId, field.id, e.target.value)}
                           disabled={isDeleting}
                         />
