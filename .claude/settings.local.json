@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(docker compose:*)"
+      "Bash(docker compose:*)",
+      "Bash(npx tsc:*)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(npx prisma:*)",
+      "Bash(npm run:*)",
+      "Bash(sed -n '37,45p' wikilive/frontend/src/lib/api.ts)",
+      "Bash(sed -n '124,145p' wikilive/frontend/src/lib/api.ts)",
+      "Bash(sed -n '138,155p' wikilive/frontend/src/lib/api.ts)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(npm install:*)",
+      "Bash(sed -n '441,476p' \"c:\\\\Users\\\\kubov\\\\Documents\\\\GitHub\\\\mtchack\\\\wikilive\\\\frontend\\\\src\\\\styles\\\\global.css\")",
+      "Bash(sed -n '608,620p' \"c:\\\\Users\\\\kubov\\\\Documents\\\\GitHub\\\\mtchack\\\\wikilive\\\\frontend\\\\src\\\\styles\\\\global.css\")",
+      "Bash(node -e \"const m = require\\('c:/Users/kubov/Documents/GitHub/mtchack/wikilive/frontend/node_modules/@tiptap/extension-image/dist/index.js'\\); console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(xargs grep:*)"
     ]
   }
 }
