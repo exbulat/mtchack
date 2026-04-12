@@ -13,14 +13,38 @@ import { PagesListContext } from '../components/RightSidebar';
 import { useAuth } from '../context/AuthContext';
 import type { EditorCollab } from '../components/Editor';
 
+const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
+const LAST_SPACE_PAGE_KEY_PREFIX = 'wikilive-last-space-page:';
+
+function isTiptapNode(value: unknown): value is JSONContent {
+  return typeof value === 'object' && value !== null && 'type' in (value as Record<string, unknown>);
+}
+
+function normalizeEditorContent(value: unknown): JSONContent {
+  if (!isTiptapNode(value) || typeof value.type !== 'string') {
+    return EMPTY_DOC;
+  }
+
+  if (value.type !== 'doc') {
+    return EMPTY_DOC;
+  }
+
+  const node = value as JSONContent;
+  if (!Array.isArray(node.content)) {
+    return EMPTY_DOC;
+  }
+
+  return node;
+}
+
 export default function PageEditor() {
-  const { id } = useParams();
+  const { id, spaceId } = useParams<{ id?: string; spaceId?: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const pageId = id && id !== 'new' ? id : null;
   const [title, setTitle] = useState('Без названия');
-  const [content, setContent] = useState<JSONContent>({ type: 'doc', content: [{ type: 'paragraph' }] });
+  const [content, setContent] = useState<JSONContent>(EMPTY_DOC);
   const [loading, setLoading] = useState(true);
   const [showTableModal, setShowTableModal] = useState(false);
   const [spaceNodes, setSpaceNodes] = useState<Array<{ id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }>>([]);
@@ -54,6 +78,11 @@ export default function PageEditor() {
   );
 
   useEffect(() => {
+    if (!spaceId || !pageId) return;
+    localStorage.setItem(`${LAST_SPACE_PAGE_KEY_PREFIX}${spaceId}`, pageId);
+  }, [spaceId, pageId]);
+
+  useEffect(() => {
     if (!pageId || !user) {
       setCollab(null);
       return;
@@ -67,8 +96,9 @@ export default function PageEditor() {
       name: pageId,
       document: ydoc,
       awareness,
-      // Auth happens via HttpOnly cookie — token field just silences the client warning
-      token: 'cookie',
+      // We authenticate the websocket with the same session cookie as HTTP.
+      token: () => 'cookie-session',
+      quiet: true,
     });
     setCollab({ ydoc, provider });
     return () => {
@@ -88,8 +118,6 @@ export default function PageEditor() {
   useEffect(() => {
     skipTitleDebounceRef.current = true;
     let mounted = true;
-    const emptyDoc = { type: 'doc', content: [{ type: 'paragraph' }] };
-
     async function loadPage() {
       if (!pageId) {
         setLoading(false);
@@ -100,14 +128,14 @@ export default function PageEditor() {
         if (!mounted) return;
 
         let nextTitle = page.title || 'Без названия';
-        let nextContent = page.content || emptyDoc;
+        let nextContent = normalizeEditorContent(page.content);
         const localRaw = localStorage.getItem(`wikilive-page-${pageId}`);
         if (localRaw) {
           const localData = JSON.parse(localRaw);
           const serverTs = new Date(page.updatedAt).getTime();
           if ((localData.updatedAt || 0) > serverTs) {
             nextTitle = localData.title || nextTitle;
-            nextContent = localData.content || nextContent;
+            nextContent = normalizeEditorContent(localData.content) || nextContent;
           }
         }
         setTitle(nextTitle);
@@ -194,9 +222,11 @@ export default function PageEditor() {
 
   const ensurePageForBlocks = async () => {
     if (pageId) return pageId;
-    const created = await api.createPage({ title, content });
+    const created = spaceId
+      ? await api.createSpacePage(spaceId, { title, content })
+      : await api.createPage({ title, content });
     bumpPagesList();
-    navigate(`/page/${created.id}`, { replace: true });
+    navigate(spaceId ? `/spaces/${spaceId}/page/${created.id}` : `/page/${created.id}`, { replace: true });
     return created.id;
   };
 
@@ -518,9 +548,10 @@ export default function PageEditor() {
               onRequestLinkEdit={openLinkPopover}
               collab={pageId ? collab : null}
               collabUser={collabUserInfo}
+              currentSpaceId={spaceId ?? null}
             />
 
-            {pageId && <Backlinks pageId={pageId} />}
+            {pageId && <Backlinks pageId={pageId} currentSpaceId={spaceId ?? null} />}
           </div>
         </section>
 

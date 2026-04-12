@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSpaces } from '../context/SpaceContext';
 
@@ -6,8 +6,15 @@ export default function CreateSpacePage() {
   const [spaceName, setSpaceName] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
-  const { createSpace } = useSpaces();
+  const { createSpace, activeSpace, spaces, loading } = useSpaces();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (loading) return;
+    if (spaces.length > 0 && activeSpace) {
+      navigate(`/spaces/${activeSpace.id}`, { replace: true });
+    }
+  }, [activeSpace, spaces, loading, navigate]);
 
   const handleCreate = async () => {
     if (!spaceName.trim()) return;

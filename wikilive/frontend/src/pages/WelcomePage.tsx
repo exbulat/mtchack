@@ -1,7 +1,21 @@
+import { useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useSpaces } from '../context/SpaceContext';
+
+const LAST_SPACE_PAGE_KEY_PREFIX = 'wikilive-last-space-page:';
 
 export default function WelcomePage() {
   const { activeSpace } = useSpaces();
+  const { spaceId } = useParams<{ spaceId?: string }>();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!spaceId) return;
+    const lastPageId = localStorage.getItem(`${LAST_SPACE_PAGE_KEY_PREFIX}${spaceId}`);
+    if (lastPageId) {
+      navigate(`/spaces/${spaceId}/page/${lastPageId}`, { replace: true });
+    }
+  }, [spaceId, navigate]);
 
   return (
     <div style={{
