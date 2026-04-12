@@ -111,8 +111,7 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
     return () => {
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageId, enabled, title, content]);
+  }, [pageId, enabled, title, content, saveNow]);
 
   // Cleanup retries on unmount
   useEffect(() => {

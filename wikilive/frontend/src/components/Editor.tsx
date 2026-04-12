@@ -14,7 +14,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import * as Y from 'yjs';
 import { useNavigate } from 'react-router-dom';
-import SlashMenu, { SLASH_ITEMS, SlashItem } from './SlashMenu';
+import SlashMenu, { SlashItem } from './SlashMenu';
 import TableEmbed from './TableEmbed';
 import { WikiLink } from '../extensions/WikiLink';
 import { api } from '../lib/api';
