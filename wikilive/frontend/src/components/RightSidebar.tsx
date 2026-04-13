@@ -232,20 +232,9 @@ export default function RightSidebar() {
                   </span>
                 </span>
                 <button
+                  type="button"
                   onClick={(e) => void deletePage(e, p.id)}
                   title="Удалить"
-                  style={{
-                    opacity: 0,
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: 14,
-                    color: 'var(--text-muted)',
-                    padding: '2px 4px',
-                    borderRadius: 4,
-                    flexShrink: 0,
-                    transition: 'opacity 0.15s',
-                  }}
                   className="right-sidebar-item-delete"
                 >
                   🗑

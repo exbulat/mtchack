@@ -224,6 +224,22 @@ strong { color: var(--text); font-weight: 600; }
 .sidebar-item:hover .sidebar-item-delete { opacity: 0.6; }
 .sidebar-item-delete:hover { opacity: 1 !important; color: var(--danger); }
 
+/* RightSidebar (NavLink rows) — same pattern; no inline opacity (inline beats :hover) */
+.right-sidebar-item-delete {
+  opacity: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.right-sidebar-item:hover .right-sidebar-item-delete { opacity: 0.6; }
+.right-sidebar-item-delete:hover { opacity: 1 !important; color: var(--danger); }
+
 /* ══════════════════════════════════════
    BUTTONS
 ══════════════════════════════════════ */
