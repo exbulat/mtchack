@@ -17,6 +17,8 @@ import FloatingComments, { FloatingPanel } from '../components/FloatingComments'
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
 const LAST_SPACE_PAGE_KEY_PREFIX = 'wikilive-last-space-page:';
 const DRAFT_KEY_PREFIX = 'wikilive-page-draft:';
+const DEFAULT_PAGE_TITLE = 'Без названия';
+const NEW_PAGE_AUTOCREATE_DEBOUNCE_MS = 1200;
 type ChainWithImage = ReturnType<TiptapEditor['chain']> & {
   setImage: (attrs: { src: string }) => ReturnType<TiptapEditor['chain']>;
 };
@@ -42,20 +44,52 @@ function normalizeEditorContent(value: unknown): JSONContent {
   return node;
 }
 
-function readDraftFromSession(pageId: string): { updatedAt?: number; title?: string; content?: unknown; expiresAt?: number } | null {
+function readDraftFromSession(storageKey: string): { updatedAt?: number; title?: string; content?: unknown; expiresAt?: number } | null {
   try {
-    const raw = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}${pageId}`);
+    const raw = sessionStorage.getItem(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { updatedAt?: number; title?: string; content?: unknown; expiresAt?: number };
     if (parsed.expiresAt && parsed.expiresAt < Date.now()) {
-      sessionStorage.removeItem(`${DRAFT_KEY_PREFIX}${pageId}`);
+      sessionStorage.removeItem(storageKey);
       return null;
     }
     return parsed;
   } catch {
-    sessionStorage.removeItem(`${DRAFT_KEY_PREFIX}${pageId}`);
+    sessionStorage.removeItem(storageKey);
     return null;
   }
+}
+
+function moveDraftSession(sourceKey: string | null, targetKey: string): void {
+  if (!sourceKey || sourceKey === targetKey) return;
+  const localData = readDraftFromSession(sourceKey);
+  if (!localData) {
+    sessionStorage.removeItem(sourceKey);
+    return;
+  }
+  try {
+    sessionStorage.setItem(targetKey, JSON.stringify(localData));
+  } catch {
+    return;
+  }
+  sessionStorage.removeItem(sourceKey);
+}
+
+function describeTablePickerError(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'Не удалось загрузить таблицы MWS';
+  if (message.includes('Missing MWS Tables token')) {
+    return 'Не настроен MWS_TABLES_TOKEN. Добавьте токен в .env, чтобы выбирать живые таблицы прямо из wiki.';
+  }
+  if (message.includes('Missing MWS Tables space')) {
+    return 'Не настроен MWS_TABLES_SPACE_ID. Укажите пространство MWS в .env, чтобы видеть доступные таблицы.';
+  }
+  if (message.includes('No MWS spaces available')) {
+    return 'В MWS Tables не найдено доступных пространств для текущего токена.';
+  }
+  if (message.includes('Failed to fetch tables')) {
+    return 'MWS Tables временно не ответил. Проверьте токен, доступ к API и попробуйте ещё раз.';
+  }
+  return message;
 }
 
 export default function PageEditor() {
@@ -64,11 +98,19 @@ export default function PageEditor() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const pageId = id && id !== 'new' ? id : null;
-  const [title, setTitle] = useState('Без названия');
+  const isNewDraftRoute = !pageId && location.pathname === '/new';
+  const draftStorageKey = pageId
+    ? `${DRAFT_KEY_PREFIX}${pageId}`
+    : isNewDraftRoute
+      ? `${DRAFT_KEY_PREFIX}route:${location.pathname}`
+      : null;
+  const [title, setTitle] = useState(DEFAULT_PAGE_TITLE);
   const [content, setContent] = useState<JSONContent>(EMPTY_DOC);
   const [loading, setLoading] = useState(true);
   const [showTableModal, setShowTableModal] = useState(false);
   const [spaceNodes, setSpaceNodes] = useState<Array<{ id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }>>([]);
+  const [tableModalLoading, setTableModalLoading] = useState(false);
+  const [tableModalError, setTableModalError] = useState<string | null>(null);
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -96,6 +138,8 @@ export default function PageEditor() {
   const { bumpPagesList } = useContext(PagesListContext);
   const titleDebounceRef = useRef<number | null>(null);
   const skipTitleDebounceRef = useRef(true);
+  const newPageCreateTimeoutRef = useRef<number | null>(null);
+  const creatingPageRef = useRef(false);
 
   const [collab, setCollab] = useState<EditorCollab | null>(null);
 
@@ -140,6 +184,7 @@ export default function PageEditor() {
     title,
     content,
     enabled: !loading,
+    draftStorageKey,
   });
 
   useEffect(() => {
@@ -149,8 +194,9 @@ export default function PageEditor() {
 
     async function loadPage() {
       if (!pageId) {
-        setTitle('Без названия');
-        setContent(EMPTY_DOC);
+        const localData = draftStorageKey ? readDraftFromSession(draftStorageKey) : null;
+        setTitle(localData?.title || DEFAULT_PAGE_TITLE);
+        setContent(normalizeEditorContent(localData?.content));
         setLoading(false);
         return;
       }
@@ -158,9 +204,9 @@ export default function PageEditor() {
         const page = await api.getPage(pageId);
         if (!mounted) return;
 
-        let nextTitle = page.title || 'Без названия';
+        let nextTitle = page.title || DEFAULT_PAGE_TITLE;
         let nextContent = normalizeEditorContent(page.content);
-        const localData = readDraftFromSession(pageId);
+        const localData = draftStorageKey ? readDraftFromSession(draftStorageKey) : null;
         if (localData) {
           const serverTs = new Date(page.updatedAt).getTime();
           if ((localData.updatedAt || 0) > serverTs) {
@@ -181,7 +227,7 @@ export default function PageEditor() {
     return () => {
       mounted = false;
     };
-  }, [pageId]);
+  }, [draftStorageKey, pageId]);
 
   // заголовок сохраняем отдельной задержкой, чтобы не плодить ревизии контента на каждую букву
   useEffect(() => {
@@ -231,26 +277,63 @@ export default function PageEditor() {
     } catch { /* ignore */ }
   };
 
-  const ensurePageForBlocks = async () => {
+  const ensurePageForBlocks = useCallback(async () => {
     if (pageId) return pageId;
     const created = spaceId
       ? await api.createSpacePage(spaceId, { title, content })
       : await api.createPage({ title, content });
+    moveDraftSession(draftStorageKey, `${DRAFT_KEY_PREFIX}${created.id}`);
     bumpPagesList();
     navigate(spaceId ? `/spaces/${spaceId}/page/${created.id}` : `/page/${created.id}`, { replace: true });
     return created.id;
-  };
+  }, [bumpPagesList, content, draftStorageKey, navigate, pageId, spaceId, title]);
+
+  const hasMeaningfulDraft = useMemo(() => {
+    if (!isNewDraftRoute) return false;
+    if (title.trim() && title.trim() !== DEFAULT_PAGE_TITLE) return true;
+    return extractText(content).trim().length > 0;
+  }, [content, isNewDraftRoute, title]);
+
+  useEffect(() => {
+    if (!isNewDraftRoute || loading || !hasMeaningfulDraft || creatingPageRef.current) return;
+
+    if (newPageCreateTimeoutRef.current) {
+      window.clearTimeout(newPageCreateTimeoutRef.current);
+    }
+
+    newPageCreateTimeoutRef.current = window.setTimeout(() => {
+      if (creatingPageRef.current) return;
+      creatingPageRef.current = true;
+      void ensurePageForBlocks().finally(() => {
+        creatingPageRef.current = false;
+      });
+    }, NEW_PAGE_AUTOCREATE_DEBOUNCE_MS);
+
+    return () => {
+      if (newPageCreateTimeoutRef.current) {
+        window.clearTimeout(newPageCreateTimeoutRef.current);
+        newPageCreateTimeoutRef.current = null;
+      }
+    };
+  }, [ensurePageForBlocks, hasMeaningfulDraft, isNewDraftRoute, loading]);
 
   const openTablePicker = async () => {
+    setShowTableModal(true);
+    setTableModalLoading(true);
+    setTableModalError(null);
+    setSpaceNodes([]);
     try {
       await ensurePageForBlocks();
       const nodesData = await api.listTables();
       const nodes = (nodesData?.data?.nodes || nodesData?.nodes || []) as Array<{ id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }>;
       setSpaceNodes(nodes);
-      setShowTableModal(true);
-    } catch {
-      setSpaceNodes([]);
-      setShowTableModal(true);
+      if (nodes.length === 0) {
+        setTableModalError('В подключённом пространстве MWS пока нет таблиц. Создайте таблицу в MWS Tables и попробуйте снова.');
+      }
+    } catch (error) {
+      setTableModalError(describeTablePickerError(error));
+    } finally {
+      setTableModalLoading(false);
     }
   };
 
@@ -269,6 +352,7 @@ export default function PageEditor() {
         .run();
     }
     setShowTableModal(false);
+    setTableModalError(null);
   };
 
   const insertAiBlock = () => {
@@ -475,7 +559,7 @@ export default function PageEditor() {
 
       handleSelectPageLink(nextTitle);
     } catch {
-      alert('Could not create page link');
+      alert('Не удалось создать ссылку на страницу');
     }
   }, [pageLinkOptions, pageLinkQuery, spaceId, bumpPagesList, handleSelectPageLink]);
 
@@ -701,10 +785,18 @@ export default function PageEditor() {
       )}
 
       {showTableModal && (
-        <div className="modal-overlay" onClick={() => setShowTableModal(false)}>
+        <div className="modal-overlay" onClick={() => {
+          setShowTableModal(false);
+          setTableModalError(null);
+        }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Выберите таблицу MWS</h3>
+            <p className="modal-note">
+              Таблица будет встроена прямо в страницу и продолжит синхронизироваться с MWS Tables.
+            </p>
             <ul className="modal-list">
+              {tableModalLoading && <li className="modal-list-item modal-list-item--muted">Загружаем таблицы...</li>}
+              {tableModalError && <li className="modal-list-item modal-list-item--muted">{tableModalError}</li>}
               {spaceNodes.map((node) => (
                 <li
                   key={node.id || node.nodeId}
@@ -714,9 +806,17 @@ export default function PageEditor() {
                   <span>{node.name || node.title || node.id}</span>
                 </li>
               ))}
-              {spaceNodes.length === 0 && <li className="modal-list-item">Нет доступных таблиц</li>}
+              {!tableModalLoading && !tableModalError && spaceNodes.length === 0 && (
+                <li className="modal-list-item">Нет доступных таблиц</li>
+              )}
             </ul>
-            <button className="modal-close" onClick={() => setShowTableModal(false)}>
+            <button className="modal-close" onClick={() => void openTablePicker()} disabled={tableModalLoading}>
+              Обновить список
+            </button>
+            <button className="modal-close" onClick={() => {
+              setShowTableModal(false);
+              setTableModalError(null);
+            }}>
               Закрыть
             </button>
           </div>
@@ -726,19 +826,19 @@ export default function PageEditor() {
       {showPageLinkModal && (
         <div className="modal-overlay" onClick={() => setShowPageLinkModal(false)}>
           <div className="modal link-popover-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Wiki link</h3>
+            <h3>Ссылка на страницу</h3>
             <label className="link-field">
-              <span>Page</span>
+              <span>Страница</span>
               <input
                 type="text"
                 value={pageLinkQuery}
                 onChange={(e) => setPageLinkQuery(e.target.value)}
-                placeholder="Find or create a page"
+                placeholder="Найдите страницу или создайте новую"
                 autoFocus
               />
             </label>
             <div className="modal-list">
-              {pageLinkLoading && <div className="modal-list-item">Searching...</div>}
+              {pageLinkLoading && <div className="modal-list-item modal-list-item--muted">Ищем страницы...</div>}
               {!pageLinkLoading && pageLinkOptions.map((item) => (
                 <button
                   key={item.id}
@@ -750,15 +850,15 @@ export default function PageEditor() {
                 </button>
               ))}
               {!pageLinkLoading && pageLinkOptions.length === 0 && (
-                <div className="modal-list-item">No pages found</div>
+                <div className="modal-list-item modal-list-item--muted">Страницы не найдены</div>
               )}
             </div>
             <div className="link-popover-actions">
               <button type="button" className="btn btn-primary" onClick={() => void handleCreatePageLink()}>
-                Create and link
+                Создать и связать
               </button>
               <button type="button" className="btn btn-ghost" onClick={() => setShowPageLinkModal(false)}>
-                Cancel
+                Отмена
               </button>
             </div>
           </div>

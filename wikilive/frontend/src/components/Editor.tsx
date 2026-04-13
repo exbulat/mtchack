@@ -140,6 +140,7 @@ function ImageNodeView(props: NodeViewProps) {
   return (
     <NodeViewWrapper
       className={`image-node-wrapper${selected ? ' selected' : ''}`}
+      data-drag-handle=""
       style={{ ...wrapStyle, position: 'relative', display: 'block' }}
     >
       <div ref={wrapRef} style={{ position: 'relative', display: 'inline-block' }}>
@@ -251,6 +252,8 @@ function ImageNodeView(props: NodeViewProps) {
 }
 
 const ImageExtension = TiptapImageExt.extend({
+  draggable: true,
+
   addAttributes() {
     return {
       ...this.parent?.(),

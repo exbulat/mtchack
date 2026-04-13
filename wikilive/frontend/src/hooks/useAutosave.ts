@@ -6,6 +6,7 @@ interface UseAutosaveArgs {
   title: string;
   content: Record<string, unknown>;
   enabled?: boolean;
+  draftStorageKey?: string | null;
 }
 
 const DEBOUNCE_MS = 1500;
@@ -13,7 +14,13 @@ const RETRY_DELAYS = [2000, 5000, 15000];
 const DRAFT_KEY_PREFIX = 'wikilive-page-draft:';
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
-export function useAutosave({ pageId, title, content, enabled = true }: UseAutosaveArgs) {
+export function useAutosave({
+  pageId,
+  title,
+  content,
+  enabled = true,
+  draftStorageKey,
+}: UseAutosaveArgs) {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [saveError, setSaveError] = useState(false);
@@ -22,13 +29,18 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
   const retryRef = useRef<number | null>(null);
   const retryCountRef = useRef(0);
   const latestRef = useRef({ title, content });
-  const previousPageIdRef = useRef<string | null>(pageId);
+  const storageKey = draftStorageKey ?? (pageId ? `${DRAFT_KEY_PREFIX}${pageId}` : null);
+  const previousStateRef = useRef<{ pageId: string | null; storageKey: string | null }>({
+    pageId,
+    storageKey,
+  });
   const skipNextAutosaveRef = useRef(false);
 
   useEffect(() => {
-    if (pageId === previousPageIdRef.current) return;
+    const previous = previousStateRef.current;
+    if (pageId === previous.pageId && storageKey === previous.storageKey) return;
 
-    previousPageIdRef.current = pageId;
+    previousStateRef.current = { pageId, storageKey };
     skipNextAutosaveRef.current = true;
     setPendingChanges(false);
     setIsSaving(false);
@@ -45,7 +57,7 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
     }
 
     retryCountRef.current = 0;
-  }, [pageId]);
+  }, [pageId, storageKey]);
 
   useEffect(() => {
     latestRef.current = { title, content };
@@ -53,11 +65,10 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
 
   const persistLocal = useCallback(
     (t: string, c: Record<string, unknown>) => {
-      if (!pageId) return;
-      const key = `${DRAFT_KEY_PREFIX}${pageId}`;
+      if (!storageKey) return;
       try {
         sessionStorage.setItem(
-          key,
+          storageKey,
           JSON.stringify({
             title: t,
             content: c,
@@ -69,14 +80,14 @@ export function useAutosave({ pageId, title, content, enabled = true }: UseAutos
         // sessionStorage might be full or unavailable.
       }
     },
-    [pageId],
+    [storageKey],
   );
 
   useEffect(() => {
-    if (!pageId || !enabled) return;
+    if (!storageKey || !enabled) return;
     if (skipNextAutosaveRef.current) return;
     persistLocal(title, content);
-  }, [pageId, enabled, title, content, persistLocal]);
+  }, [storageKey, enabled, title, content, persistLocal]);
 
   const attemptServerSave = useCallback(
     async (t: string, c: Record<string, unknown>): Promise<boolean> => {

@@ -38,7 +38,7 @@ export default function Register() {
         
         <form onSubmit={onSubmit} className="auth-form">
           <label>
-            Имя (видно в комментариях и курсорах)
+            Имя
             <input
               type="text"
               autoComplete="name"
@@ -60,7 +60,7 @@ export default function Register() {
             />
           </label>
           <label>
-            Пароль (не меньше 6 символов)
+            Пароль (не меньше 10 символов)
             <input
               type="password"
               autoComplete="new-password"

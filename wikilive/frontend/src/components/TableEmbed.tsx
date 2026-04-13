@@ -22,6 +22,55 @@ interface TableEmbedProps {
 }
 
 const PAGE_SIZE = 50;
+const LIVE_POLL_INTERVAL_MS = 10_000;
+const EDITABLE_FIELD_TYPE_HINTS = new Set([
+  'text',
+  'singletext',
+  'single_text',
+  'string',
+  'number',
+  'integer',
+  'float',
+  'checkbox',
+  'bool',
+  'boolean',
+  'email',
+  'url',
+  'phone',
+  'date',
+  'datetime',
+  'currency',
+  'percent',
+]);
+const READONLY_FIELD_TYPE_HINTS = new Set([
+  'attachment',
+  'formula',
+  'lookup',
+  'rollup',
+  'relation',
+  'link',
+  'linkedrecord',
+  'linked_record',
+  'member',
+  'user',
+  'select',
+  'multiselect',
+  'multi_select',
+  'rating',
+  'createdtime',
+  'created_time',
+  'updatedtime',
+  'updated_time',
+]);
+
+function formatSyncTime(timestamp: number | null): string {
+  if (!timestamp) return 'ещё не синхронизировано';
+  return new Date(timestamp).toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
 
 /** MWS Fusion часто отдаёт не строку, а объект (rich text, select, ссылка и т.д.). */
 function mwsCellDisplayValue(raw: unknown): string {
@@ -40,6 +89,54 @@ function mwsCellDisplayValue(raw: unknown): string {
   return '';
 }
 
+function normalizeFieldId(field: MwsField): string {
+  return String(field.id || field.fieldId || field.name || '');
+}
+
+function normalizeFieldName(field: MwsField): string {
+  return String(field.name || field.fieldName || field.id || '');
+}
+
+function getFieldTypeHint(field: MwsField): string | null {
+  const directType = field.type ?? field.fieldType;
+  if (typeof directType === 'string' && directType.trim()) {
+    return directType.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  }
+
+  const property = field.property;
+  if (property && typeof property === 'object') {
+    const typeFromProperty = (property as Record<string, unknown>).type;
+    if (typeof typeFromProperty === 'string' && typeFromProperty.trim()) {
+      return typeFromProperty.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    }
+  }
+
+  return null;
+}
+
+function isSimpleCellValue(raw: unknown): boolean {
+  return raw == null || typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean';
+}
+
+function canEditField(field: MwsField, records: MwsRecord[]): boolean {
+  const typeHint = getFieldTypeHint(field);
+  if (typeHint) {
+    if (READONLY_FIELD_TYPE_HINTS.has(typeHint)) return false;
+    if (EDITABLE_FIELD_TYPE_HINTS.has(typeHint)) return true;
+  }
+
+  const fieldId = normalizeFieldId(field);
+  const sampleValue = records
+    .map((record) => (record.fields || {})[fieldId])
+    .find((value) => value !== undefined);
+
+  if (sampleValue === undefined) {
+    return true;
+  }
+
+  return isSimpleCellValue(sampleValue);
+}
+
 export default function TableEmbed({ dstId, title }: TableEmbedProps) {
   const [fields, setFields] = useState<MwsField[]>([]);
   const [records, setRecords] = useState<MwsRecord[]>([]);
@@ -55,6 +152,7 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
   const [sortAsc, setSortAsc] = useState(true);
   const [filterText, setFilterText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(
@@ -71,6 +169,7 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
         setFields(rawFields);
         setRecords(rawRecords);
         setTotalRecords(rawRecords.length);
+        setLastLoadedAt(Date.now());
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Ошибка загрузки');
         setFields([]);
@@ -84,13 +183,30 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
 
   useEffect(() => {
     load(page);
-  }, [dstId, page]);
+  }, [dstId, page, load]);
 
-  // Auto-refresh every 30 seconds to keep the table live
   useEffect(() => {
-    refreshTimerRef.current = setInterval(() => load(page), 30_000);
+    refreshTimerRef.current = setInterval(() => load(page), LIVE_POLL_INTERVAL_MS);
     return () => {
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
+    };
+  }, [load, page]);
+
+  useEffect(() => {
+    const syncNow = () => {
+      void load(page);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncNow();
+      }
+    };
+
+    window.addEventListener('focus', syncNow);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', syncNow);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [load, page]);
 
@@ -98,11 +214,13 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
     () =>
       fields
         .map((f) => ({
-          id: f.id || f.fieldId || f.name || '',
-          name: f.name || f.fieldName || f.id || '',
+          id: normalizeFieldId(f),
+          name: normalizeFieldName(f),
+          editable: canEditField(f, records),
+          typeHint: getFieldTypeHint(f),
         }))
         .filter((f) => f.id),
-    [fields]
+    [fields, records]
   );
 
   const filteredRecords = useMemo(() => {
@@ -110,8 +228,7 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
     if (filterText.trim()) {
       const lower = filterText.toLowerCase();
       result = result.filter((r) =>
-        Object.values(r.fields || {}).some((v) => mwsCellDisplayValue(v).toLowerCase().includes(lower)
-        )
+        Object.values(r.fields || {}).some((v) => mwsCellDisplayValue(v).toLowerCase().includes(lower))
       );
     }
     if (sortField) {
@@ -125,6 +242,9 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
   }, [records, page, filterText, sortField, sortAsc]);
 
   const updateCell = async (recordId: string, fieldId: string, value: string) => {
+    const targetField = normalizedFields.find((field) => field.id === fieldId);
+    if (!targetField?.editable) return;
+
     const cellKey = `${recordId}:${fieldId}`;
     setSavingCells((prev) => new Set(prev).add(cellKey));
     try {
@@ -138,8 +258,8 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
             : r
         )
       );
+      setLastLoadedAt(Date.now());
     } catch {
-      // revert on error — refetch this page
       load(page);
     } finally {
       setSavingCells((prev) => {
@@ -156,6 +276,7 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
       await api.deleteRecords(dstId, [recordId]);
       setRecords((prev) => prev.filter((r) => (r.recordId || r.id) !== recordId));
       setTotalRecords((n) => n - 1);
+      setLastLoadedAt(Date.now());
     } catch {
       /* ignore */
     } finally {
@@ -169,16 +290,22 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
 
   const addRow = async () => {
     if (addingRow) return;
+    const editableFieldIds = new Set(
+      normalizedFields.filter((field) => field.editable).map((field) => field.id)
+    );
+    const nextRecordFields = Object.fromEntries(
+      Object.entries(newRowValues).filter(([fieldId]) => editableFieldIds.has(fieldId))
+    );
+    if (Object.keys(nextRecordFields).length === 0) return;
+
     setAddingRow(true);
     try {
-      const created = await api.createRecords(dstId, {
-        records: [{ fields: newRowValues }],
+      await api.createRecords(dstId, {
+        records: [{ fields: nextRecordFields }],
       });
-      // API returns new records; refresh to get server-assigned ID
       await load(page);
       setNewRowValues({});
       setShowNewRow(false);
-      void created;
     } catch {
       /* ignore */
     } finally {
@@ -196,12 +323,14 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
   };
 
   const hasMore = records.length === PAGE_SIZE * page;
+  const hasEditableFields = normalizedFields.some((field) => field.editable);
+  const hasReadonlyFields = normalizedFields.some((field) => !field.editable);
 
   if (loading && records.length === 0) {
     return (
       <div className="table-embed table-embed--loading">
         <span className="table-embed-spinner" />
-        Загрузка таблицы…
+        Загрузка таблицы...
       </div>
     );
   }
@@ -209,12 +338,18 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
   return (
     <div className="table-embed">
       <div className="table-embed-header">
-        <span className="table-embed-title">{title || `Таблица ${dstId}`}</span>
+        <div className="table-embed-title-group">
+          <span className="table-embed-title">{title || `Таблица ${dstId}`}</span>
+          <span className="table-embed-sync">
+            <span className={`table-embed-sync-dot${error ? ' table-embed-sync-dot--error' : ''}`} />
+            {error ? 'Синхронизация остановлена' : `Живая синхронизация · ${formatSyncTime(lastLoadedAt)}`}
+          </span>
+        </div>
         <div className="table-embed-controls">
           <input
             className="table-embed-filter"
             type="text"
-            placeholder="Фильтр…"
+            placeholder="Фильтр..."
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
           />
@@ -224,19 +359,36 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
             title="Обновить"
             disabled={loading}
           >
-            {loading ? '⟳' : '↺'}
+            {loading ? '...' : '↻'}
           </button>
           <button
             className="table-embed-btn table-embed-btn--add"
             onClick={() => setShowNewRow((v) => !v)}
             title="Добавить строку"
+            disabled={!hasEditableFields}
           >
             + Строка
           </button>
         </div>
       </div>
 
-      {error && <div className="table-embed-error">{error}</div>}
+      {error && (
+        <div className="table-embed-error">
+          <div className="table-embed-error-copy">
+            <strong>Не удалось обновить таблицу.</strong>
+            <span>{error}</span>
+          </div>
+          <button className="table-embed-btn" onClick={() => load(page)} disabled={loading}>
+            Повторить
+          </button>
+        </div>
+      )}
+
+      {hasReadonlyFields && (
+        <div className="table-embed-info">
+          Часть колонок доступна только для просмотра: inline-редактирование включено для простых типов полей.
+        </div>
+      )}
 
       <div className="table-embed-scroll">
         <table>
@@ -263,14 +415,23 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
               <tr className="table-embed-new-row">
                 {normalizedFields.map((field) => (
                   <td key={field.id}>
-                    <input
-                      className="table-embed-cell-input"
-                      value={newRowValues[field.id] ?? ''}
-                      onChange={(e) =>
-                        setNewRowValues((prev) => ({ ...prev, [field.id]: e.target.value }))
-                      }
-                      placeholder={field.name}
-                    />
+                    {field.editable ? (
+                      <input
+                        className="table-embed-cell-input"
+                        value={newRowValues[field.id] ?? ''}
+                        onChange={(e) =>
+                          setNewRowValues((prev) => ({ ...prev, [field.id]: e.target.value }))
+                        }
+                        placeholder={field.name}
+                      />
+                    ) : (
+                      <span
+                        className="table-embed-cell-readonly"
+                        title={field.typeHint ? `Поле ${field.typeHint}` : 'Поле только для просмотра'}
+                      >
+                        Недоступно
+                      </span>
+                    )}
                   </td>
                 ))}
                 <td className="table-embed-actions">
@@ -280,13 +441,31 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
                     disabled={addingRow}
                     title="Сохранить"
                   >
-                    {addingRow ? '…' : '✓'}
+                    {addingRow ? '...' : '✓'}
                   </button>
                   <button
                     className="table-embed-btn table-embed-btn--cancel"
-                    onClick={() => { setShowNewRow(false); setNewRowValues({}); }}
+                    onClick={() => {
+                      setShowNewRow(false);
+                      setNewRowValues({});
+                    }}
                     title="Отмена"
                   >
+                    ×
+                  </button>
+                </td>
+              </tr>
+            )}
+
+            {!showNewRow && hasEditableFields && (
+              <tr className="table-embed-add-row">
+                <td colSpan={normalizedFields.length + 1}>
+                  <button
+                    type="button"
+                    className="table-embed-add-row-btn"
+                    onClick={() => setShowNewRow(true)}
+                  >
+                    + Добавить строку
                   </button>
                 </td>
               </tr>
@@ -304,13 +483,22 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
                     const isSaving = savingCells.has(cellKey);
                     return (
                       <td key={cellKey} className={isSaving ? 'table-embed-cell--saving' : ''}>
-                        <input
-                          key={`${cellKey}:${mwsCellDisplayValue(rowFields[field.id])}`}
-                          className="table-embed-cell-input"
-                          defaultValue={mwsCellDisplayValue(rowFields[field.id])}
-                          onBlur={(e) => updateCell(recordId, field.id, e.target.value)}
-                          disabled={isDeleting}
-                        />
+                        {field.editable ? (
+                          <input
+                            key={`${cellKey}:${mwsCellDisplayValue(rowFields[field.id])}`}
+                            className="table-embed-cell-input"
+                            defaultValue={mwsCellDisplayValue(rowFields[field.id])}
+                            onBlur={(e) => updateCell(recordId, field.id, e.target.value)}
+                            disabled={isDeleting}
+                          />
+                        ) : (
+                          <span
+                            className="table-embed-cell-readonly"
+                            title={field.typeHint ? `Поле ${field.typeHint}` : 'Поле только для просмотра'}
+                          >
+                            {mwsCellDisplayValue(rowFields[field.id]) || '—'}
+                          </span>
+                        )}
                       </td>
                     );
                   })}
@@ -321,7 +509,7 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
                       disabled={isDeleting}
                       title="Удалить строку"
                     >
-                      {isDeleting ? '…' : '✕'}
+                      {isDeleting ? '...' : '✕'}
                     </button>
                   </td>
                 </tr>

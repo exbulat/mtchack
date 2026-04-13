@@ -8,11 +8,26 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
   });
+
+  const parseJson = async (): Promise<unknown> =>
+    res.json().catch(() => ({ error: res.statusText }));
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
+    const err = await parseJson() as { error?: string; message?: string };
     throw new Error(err.error || `HTTP ${res.status}`);
   }
-  return res.json();
+
+  const data = await parseJson() as {
+    success?: boolean;
+    error?: string;
+    message?: string;
+  };
+
+  if (data && typeof data === 'object' && 'success' in data && data.success === false) {
+    throw new Error(data.message || data.error || 'MWS request failed');
+  }
+
+  return data as T;
 }
 
 export interface PageSummary {
@@ -190,13 +205,13 @@ export const api = {
   createRecords: (dstId: string, body: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/tables/datasheets/${dstId}/records`, {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ fieldKey: 'id', ...body }),
     }),
 
   updateRecords: (dstId: string, body: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/tables/datasheets/${dstId}/records`, {
       method: 'PATCH',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ fieldKey: 'id', ...body }),
     }),
 
   deleteRecords: (dstId: string, recordIds: string[]) =>

@@ -51,10 +51,17 @@ export function SpaceProvider({ children }: { children: ReactNode }) {
   }, [refreshSpaces]);
 
   useEffect(() => {
-    if (authLoading || !user) {
+    if (authLoading) {
+      setLoading(true);
+      return;
+    }
+
+    if (!user) {
+      setSpaces([]);
       setLoading(false);
       return;
     }
+
     setLoading(true);
     refreshSpaces().finally(() => setLoading(false));
   }, [user, authLoading, refreshSpaces]);

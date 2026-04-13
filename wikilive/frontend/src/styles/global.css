@@ -620,6 +620,10 @@ strong { color: var(--text); font-weight: 600; }
 .image-node-wrapper {
   margin: 8px 0;
   line-height: 0;
+  cursor: grab;
+}
+.image-node-wrapper:active {
+  cursor: grabbing;
 }
 .image-node-wrapper.selected img,
 .image-node-wrapper img:hover {
@@ -876,6 +880,13 @@ strong { color: var(--text); font-weight: 600; }
   color: var(--text);
 }
 
+.modal-note {
+  margin: -8px 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 .modal-list { list-style: none; }
 .modal-list-item {
   padding: 10px 12px;
@@ -889,9 +900,22 @@ strong { color: var(--text); font-weight: 600; }
   transition: all 0.1s;
 }
 .modal-list-item:hover { background: var(--accent-dim); color: var(--text); }
+.modal-list-item--muted {
+  cursor: default;
+  color: var(--text-muted);
+  white-space: normal;
+  line-height: 1.5;
+}
+.modal-list-item--muted:hover { background: transparent; color: var(--text-muted); }
+
+.modal-actions {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 .modal-close {
-  margin-top: 14px;
   padding: 8px 16px;
   background: var(--accent-dim);
   border: 1px solid var(--border);
@@ -900,6 +924,7 @@ strong { color: var(--text); font-weight: 600; }
   color: var(--text-secondary);
 }
 .modal-close:hover { color: var(--text); }
+.modal-close + .modal-close { margin-left: 8px; }
 
 /* ══════════════════════════════════════
    RIGHT PANEL (comments / history)
@@ -1271,6 +1296,13 @@ strong { color: var(--text); font-weight: 600; }
   border-bottom: 1px solid var(--border);
   gap: 8px;
 }
+.table-embed-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
 .table-embed-title {
   font-family: var(--font-heading);
   font-size: 10px;
@@ -1279,6 +1311,24 @@ strong { color: var(--text); font-weight: 600; }
   text-transform: uppercase;
   color: var(--text-secondary);
   flex: 1;
+}
+.table-embed-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.table-embed-sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 4px color-mix(in srgb, #22c55e 18%, transparent);
+}
+.table-embed-sync-dot--error {
+  background: #ef4444;
+  box-shadow: 0 0 0 4px color-mix(in srgb, #ef4444 18%, transparent);
 }
 .table-embed-controls {
   display: flex;
@@ -1348,9 +1398,34 @@ strong { color: var(--text); font-weight: 600; }
   border: none; outline: none; background: transparent;
   width: 100%; font-size: 13px; font-family: var(--font); padding: 0; color: var(--text);
 }
+.table-embed-cell-readonly {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  color: var(--text-secondary);
+  opacity: 0.9;
+}
 .table-embed-cell--saving { opacity: 0.6; }
 .table-embed-row--deleting { opacity: 0.4; pointer-events: none; }
 .table-embed-new-row td { background: color-mix(in srgb, var(--accent) 5%, var(--bg)); }
+.table-embed-add-row td {
+  padding: 0 !important;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 3%, var(--bg));
+}
+.table-embed-add-row-btn {
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  transition: background 0.12s, color 0.12s;
+}
+.table-embed-add-row-btn:hover {
+  background: var(--accent-dim);
+  color: var(--text);
+}
 
 .table-embed-empty {
   text-align: center;
@@ -1359,11 +1434,27 @@ strong { color: var(--text); font-weight: 600; }
   font-size: 12px;
 }
 .table-embed-error {
-  padding: 8px 12px;
+  padding: 10px 12px;
   background: color-mix(in srgb, #ef4444 10%, var(--bg));
   color: #ef4444;
   font-size: 12px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.table-embed-error-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.table-embed-info {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 .table-embed-footer {
   display: flex;
