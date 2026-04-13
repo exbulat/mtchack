@@ -13,6 +13,7 @@ import { PagesListContext } from '../components/RightSidebar';
 import { useAuth } from '../context/AuthContext';
 import type { EditorCollab } from '../components/Editor';
 import FloatingComments, { FloatingPanel } from '../components/FloatingComments';
+import CanvasComments from '../components/CanvasComments';
 
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
 const LAST_SPACE_PAGE_KEY_PREFIX = 'wikilive-last-space-page:';
@@ -119,6 +120,8 @@ export default function PageEditor() {
   const [aiShareContext, setAiShareContext] = useState(false);
   const [description, setDescription] = useState('');
   const [showComments, setShowComments] = useState(false);
+  const [canvasCommentMode, setCanvasCommentMode] = useState(false);
+  const [focusedCanvasCommentId, setFocusedCanvasCommentId] = useState<string | null>(null);
   const [showTimeline, setShowTimeline] = useState(false);
   const [revisions, setRevisions] = useState<Array<{ id: string; pageId: string; createdAt: string; content: JSONContent }>>([]);
   const [editorInstance, setEditorInstance] = useState<TiptapEditor | null>(null);
@@ -138,6 +141,7 @@ export default function PageEditor() {
   const { bumpPagesList } = useContext(PagesListContext);
   const titleDebounceRef = useRef<number | null>(null);
   const skipTitleDebounceRef = useRef(true);
+  const canvasSurfaceRef = useRef<HTMLDivElement | null>(null);
   const newPageCreateTimeoutRef = useRef<number | null>(null);
   const creatingPageRef = useRef(false);
 
@@ -632,6 +636,12 @@ export default function PageEditor() {
     setRevisions((prev) => prev.filter((item) => item.id !== revisionId));
   };
 
+  const handleNavigateToComment = useCallback((comment: { id: string; blockId: string }) => {
+    if (!comment.blockId.startsWith('canvas_')) return;
+    setCanvasCommentMode(true);
+    setFocusedCanvasCommentId(comment.id);
+  }, []);
+
   if ((pageId || location.pathname === '/new') && authLoading) {
     return <div className="loading">Загрузка…</div>;
   }
@@ -682,6 +692,13 @@ export default function PageEditor() {
           <button className="toolbar-btn" onClick={openTablePicker} title="Таблица MWS">
             MWS
           </button>
+          <button
+            className={`toolbar-btn${canvasCommentMode ? ' active' : ''}`}
+            onClick={() => setCanvasCommentMode((v) => !v)}
+            title="Комментарии на канвасе"
+          >
+            💬
+          </button>
           <button className="toolbar-btn" onClick={() => setShowImageModal(true)} title="Вставить изображение">
             🖼
           </button>
@@ -707,7 +724,18 @@ export default function PageEditor() {
 
       <div className="editor-stage">
         <section className="doc-column">
-          <div className="page-editor-container">
+          <div ref={canvasSurfaceRef} className={`canvas-surface${canvasCommentMode ? ' canvas-surface--comment-mode' : ''}`}>
+            {pageId && (
+              <CanvasComments
+                pageId={pageId}
+                currentUserId={user?.id}
+                surfaceRef={canvasSurfaceRef}
+                enabled={canvasCommentMode}
+                focusCommentId={focusedCanvasCommentId}
+                onFocusHandled={() => setFocusedCanvasCommentId(null)}
+              />
+            )}
+            <div className="page-editor-container">
             <input
               className="page-title-input"
               value={title}
@@ -738,6 +766,7 @@ export default function PageEditor() {
             />
 
             {pageId && <Backlinks pageId={pageId} currentSpaceId={spaceId ?? null} />}
+            </div>
           </div>
         </section>
 
@@ -750,6 +779,7 @@ export default function PageEditor() {
           currentUserId={user?.id}
           visible={showComments}
           onClose={() => setShowComments(false)}
+          onNavigateToComment={handleNavigateToComment}
         />
       )}
 

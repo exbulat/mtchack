@@ -68,6 +68,13 @@ export interface PageComment {
   createdAt: string;
 }
 
+export type PageCommentEventDetail =
+  | { type: 'created'; comment: PageComment }
+  | { type: 'updated'; comment: PageComment }
+  | { type: 'deleted'; pageId: string; commentId: string };
+
+const PAGE_COMMENT_EVENT = 'wikilive:page-comment';
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -309,3 +316,20 @@ export const api = {
     return data.url;
   },
 };
+
+export function emitPageCommentEvent(detail: PageCommentEventDetail): void {
+  window.dispatchEvent(new CustomEvent<PageCommentEventDetail>(PAGE_COMMENT_EVENT, { detail }));
+}
+
+export function subscribePageCommentEvents(
+  handler: (detail: PageCommentEventDetail) => void,
+): () => void {
+  const listener = (event: Event) => {
+    const customEvent = event as CustomEvent<PageCommentEventDetail>;
+    if (!customEvent.detail) return;
+    handler(customEvent.detail);
+  };
+
+  window.addEventListener(PAGE_COMMENT_EVENT, listener as EventListener);
+  return () => window.removeEventListener(PAGE_COMMENT_EVENT, listener as EventListener);
+}
