@@ -24,9 +24,11 @@ import { api } from '../lib/api';
 function MwsTableNodeView(props: NodeViewProps) {
   const dstId = props.node.attrs.dstId as string;
   const title = (props.node.attrs.title as string) || '';
+  const viewId = (props.node.attrs.viewId as string) || '';
+  const viewName = (props.node.attrs.viewName as string) || '';
   return (
     <NodeViewWrapper className="mws-table-node-view" data-drag-handle="">
-      <TableEmbed dstId={dstId} title={title} />
+      <TableEmbed dstId={dstId} title={title} viewId={viewId} viewName={viewName} />
     </NodeViewWrapper>
   );
 }
@@ -42,6 +44,8 @@ const MwsTableExtension = Node.create({
     return {
       dstId: { default: '' },
       title: { default: '' },
+      viewId: { default: '' },
+      viewName: { default: '' },
     };
   },
   parseHTML() {
@@ -53,6 +57,8 @@ const MwsTableExtension = Node.create({
           return {
             dstId: node.getAttribute('data-dst-id') || '',
             title: node.getAttribute('data-title') || '',
+            viewId: node.getAttribute('data-view-id') || '',
+            viewName: node.getAttribute('data-view-name') || '',
           };
         },
       },
@@ -65,6 +71,8 @@ const MwsTableExtension = Node.create({
         'data-mws-table': '',
         'data-dst-id': HTMLAttributes.dstId,
         'data-title': HTMLAttributes.title,
+        'data-view-id': HTMLAttributes.viewId,
+        'data-view-name': HTMLAttributes.viewName,
       }),
     ];
   },

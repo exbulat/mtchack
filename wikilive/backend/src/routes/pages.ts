@@ -140,6 +140,21 @@ function sanitizeContentNode(node: unknown, depth = 0): unknown {
     if (typeof attrs.title === 'string') {
       attrs.title = attrs.title.substring(0, 200);
     }
+    const viewId = typeof attrs.viewId === 'string' ? attrs.viewId.trim() : '';
+    if (viewId) {
+      if (!/^[a-zA-Z0-9_-]{1,100}$/.test(viewId)) {
+        delete attrs.viewId;
+      } else {
+        attrs.viewId = viewId;
+      }
+    } else {
+      delete attrs.viewId;
+    }
+    if (typeof attrs.viewName === 'string') {
+      attrs.viewName = attrs.viewName.substring(0, 200);
+    } else {
+      delete attrs.viewName;
+    }
     output.attrs = attrs;
   }
 

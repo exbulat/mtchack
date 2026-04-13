@@ -105,6 +105,7 @@ export interface SpaceMemberFull {
 type MwsFieldsResponse = { data?: { fields?: unknown[] }; fields?: unknown[] };
 type MwsRecordsResponse = { data?: { records?: unknown[] }; records?: unknown[] };
 type MwsNodesResponse = { data?: { nodes?: unknown[] }; nodes?: unknown[] };
+type MwsViewsResponse = { data?: { views?: unknown[] }; views?: unknown[] };
 
 export const api = {
   authMe: () => request<{ user: AuthUser | null }>('/auth/me'),
@@ -206,8 +207,10 @@ export const api = {
 
   getNode: (nodeId: string) => request<Record<string, unknown>>(`/tables/nodes/${nodeId}`),
 
-  getRecords: (dstId: string, pageSize = 100) =>
-    request<MwsRecordsResponse>(`/tables/datasheets/${dstId}/records?pageSize=${pageSize}&fieldKey=id`),
+  getRecords: (dstId: string, pageSize = 100, viewId?: string | null) =>
+    request<MwsRecordsResponse>(
+      `/tables/datasheets/${dstId}/records?pageSize=${pageSize}&fieldKey=id${viewId ? `&viewId=${encodeURIComponent(viewId)}` : ''}`
+    ),
 
   createRecords: (dstId: string, body: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/tables/datasheets/${dstId}/records`, {
@@ -226,9 +229,10 @@ export const api = {
       method: 'DELETE',
     }),
 
-  getFields: (dstId: string) => request<MwsFieldsResponse>(`/tables/datasheets/${dstId}/fields`),
+  getFields: (dstId: string, viewId?: string | null) =>
+    request<MwsFieldsResponse>(`/tables/datasheets/${dstId}/fields${viewId ? `?viewId=${encodeURIComponent(viewId)}` : ''}`),
 
-  getViews: (dstId: string) => request<Record<string, unknown>>(`/tables/datasheets/${dstId}/views`),
+  getViews: (dstId: string) => request<MwsViewsResponse>(`/tables/datasheets/${dstId}/views`),
 
   createDatasheet: (spaceId: string, body: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/tables/spaces/${spaceId}/datasheets`, {

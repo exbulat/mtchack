@@ -19,6 +19,8 @@ interface MwsRecord {
 interface TableEmbedProps {
   dstId: string;
   title?: string;
+  viewId?: string;
+  viewName?: string;
 }
 
 const PAGE_SIZE = 50;
@@ -137,7 +139,7 @@ function canEditField(field: MwsField, records: MwsRecord[]): boolean {
   return isSimpleCellValue(sampleValue);
 }
 
-export default function TableEmbed({ dstId, title }: TableEmbedProps) {
+export default function TableEmbed({ dstId, title, viewId, viewName }: TableEmbedProps) {
   const [fields, setFields] = useState<MwsField[]>([]);
   const [records, setRecords] = useState<MwsRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -161,8 +163,8 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
       setError(null);
       try {
         const [fieldsData, recordsData] = await Promise.all([
-          api.getFields(dstId),
-          api.getRecords(dstId, PAGE_SIZE * currentPage),
+          api.getFields(dstId, viewId),
+          api.getRecords(dstId, PAGE_SIZE * currentPage, viewId),
         ]);
         const rawFields = (fieldsData?.data?.fields || fieldsData?.fields || []) as MwsField[];
         const rawRecords = (recordsData?.data?.records || recordsData?.records || []) as MwsRecord[];
@@ -178,12 +180,16 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
         setLoading(false);
       }
     },
-    [dstId, page]
+    [dstId, page, viewId]
   );
 
   useEffect(() => {
+    setPage(1);
+  }, [dstId, viewId]);
+
+  useEffect(() => {
     load(page);
-  }, [dstId, page, load]);
+  }, [dstId, page, load, viewId]);
 
   useEffect(() => {
     refreshTimerRef.current = setInterval(() => load(page), LIVE_POLL_INTERVAL_MS);
@@ -340,6 +346,7 @@ export default function TableEmbed({ dstId, title }: TableEmbedProps) {
       <div className="table-embed-header">
         <div className="table-embed-title-group">
           <span className="table-embed-title">{title || `Таблица ${dstId}`}</span>
+          {viewName ? <span className="table-embed-view">Вид: {viewName}</span> : null}
           <span className="table-embed-sync">
             <span className={`table-embed-sync-dot${error ? ' table-embed-sync-dot--error' : ''}`} />
             {error ? 'Синхронизация остановлена' : `Живая синхронизация · ${formatSyncTime(lastLoadedAt)}`}
