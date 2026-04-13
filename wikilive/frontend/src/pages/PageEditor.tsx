@@ -14,15 +14,45 @@ import { useAuth } from '../context/AuthContext';
 import type { EditorCollab } from '../components/Editor';
 import FloatingComments, { FloatingPanel } from '../components/FloatingComments';
 import CanvasComments from '../components/CanvasComments';
+import PageViews, { type KanbanStatus, type ViewRecord } from '../components/page/PageViews';
 
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
 const LAST_SPACE_PAGE_KEY_PREFIX = 'wikilive-last-space-page:';
 const DRAFT_KEY_PREFIX = 'wikilive-page-draft:';
+const PAGE_VIEWS_STATE_KEY_PREFIX = 'wikilive-page-views:';
 const DEFAULT_PAGE_TITLE = 'Без названия';
 const NEW_PAGE_AUTOCREATE_DEBOUNCE_MS = 1200;
 type ChainWithImage = ReturnType<TiptapEditor['chain']> & {
   setImage: (attrs: { src: string }) => ReturnType<TiptapEditor['chain']>;
 };
+
+type PageViewId =
+  | 'page'
+  | 'architecture'
+  | 'grid'
+  | 'calendar'
+  | 'gallery'
+  | 'gantt'
+  | 'kanban'
+  | 'form';
+
+interface PageViewOption {
+  id: PageViewId;
+  label: string;
+  icon: string;
+  working: boolean;
+}
+
+const PAGE_VIEW_OPTIONS: PageViewOption[] = [
+  { id: 'page', label: 'Страница', icon: 'Pg', working: true },
+  { id: 'architecture', label: 'Архитектура', icon: 'Ar', working: true },
+  { id: 'calendar', label: 'Календарь', icon: 'Cl', working: true },
+  { id: 'gallery', label: 'Галерея', icon: 'Gl', working: true },
+  { id: 'gantt', label: 'Гант', icon: 'Gt', working: true },
+  { id: 'kanban', label: 'Kanban', icon: 'Kb', working: true },
+  { id: 'grid', label: 'Сетка', icon: 'Gr', working: true },
+  { id: 'form', label: 'Форма', icon: 'Fm', working: true },
+];
 
 function isTiptapNode(value: unknown): value is JSONContent {
   return typeof value === 'object' && value !== null && 'type' in (value as Record<string, unknown>);
@@ -76,6 +106,27 @@ function moveDraftSession(sourceKey: string | null, targetKey: string): void {
   sessionStorage.removeItem(sourceKey);
 }
 
+function readPageViewsState(storageKey: string): {
+  enabledViews?: PageViewId[];
+  activeView?: PageViewId;
+  recordOverrides?: Record<string, Partial<ViewRecord>>;
+  manualViewRecords?: ViewRecord[];
+} | null {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    return JSON.parse(raw) as {
+      enabledViews?: PageViewId[];
+      activeView?: PageViewId;
+      recordOverrides?: Record<string, Partial<ViewRecord>>;
+      manualViewRecords?: ViewRecord[];
+    };
+  } catch {
+    localStorage.removeItem(storageKey);
+    return null;
+  }
+}
+
 function describeTablePickerError(error: unknown): string {
   const message = error instanceof Error ? error.message : 'Не удалось загрузить таблицы MWS';
   if (message.includes('Missing MWS Tables token')) {
@@ -105,6 +156,9 @@ export default function PageEditor() {
     : isNewDraftRoute
       ? `${DRAFT_KEY_PREFIX}route:${location.pathname}`
       : null;
+  const pageViewsStorageKey = pageId
+    ? `${PAGE_VIEWS_STATE_KEY_PREFIX}${pageId}`
+    : `${PAGE_VIEWS_STATE_KEY_PREFIX}route:${location.pathname}`;
   const [title, setTitle] = useState(DEFAULT_PAGE_TITLE);
   const [content, setContent] = useState<JSONContent>(EMPTY_DOC);
   const [loading, setLoading] = useState(true);
@@ -123,6 +177,10 @@ export default function PageEditor() {
   const [canvasCommentMode, setCanvasCommentMode] = useState(false);
   const [focusedCanvasCommentId, setFocusedCanvasCommentId] = useState<string | null>(null);
   const [showTimeline, setShowTimeline] = useState(false);
+  const [activeView, setActiveView] = useState<PageViewId>('page');
+  const [enabledViews, setEnabledViews] = useState<PageViewId[]>(['page']);
+  const [showViewsMenu, setShowViewsMenu] = useState(false);
+  const [viewsHint, setViewsHint] = useState<string | null>(null);
   const [revisions, setRevisions] = useState<Array<{ id: string; pageId: string; createdAt: string; content: JSONContent }>>([]);
   const [editorInstance, setEditorInstance] = useState<TiptapEditor | null>(null);
   const [linkPopover, setLinkPopover] = useState<{
@@ -144,6 +202,10 @@ export default function PageEditor() {
   const canvasSurfaceRef = useRef<HTMLDivElement | null>(null);
   const newPageCreateTimeoutRef = useRef<number | null>(null);
   const creatingPageRef = useRef(false);
+  const viewsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [recordOverrides, setRecordOverrides] = useState<Record<string, Partial<ViewRecord>>>({});
+  const [manualViewRecords, setManualViewRecords] = useState<ViewRecord[]>([]);
+  const [selectedViewRecordId, setSelectedViewRecordId] = useState<string | null>(null);
 
   const [collab, setCollab] = useState<EditorCollab | null>(null);
 
@@ -151,6 +213,193 @@ export default function PageEditor() {
     () => (user ? { name: user.name, color: user.avatarColor } : undefined),
     [user?.name, user?.avatarColor],
   );
+
+  const activeViewMeta: PageViewOption = useMemo(
+    () =>
+      PAGE_VIEW_OPTIONS.find((view) => view.id === activeView) ?? {
+        id: 'page',
+        label: 'Страница',
+        icon: 'Pg',
+        working: true,
+      },
+    [activeView]
+  );
+
+  const pageRecords = useMemo(() => buildPageRecords(content), [content]);
+  const architectureStats = useMemo(() => buildArchitectureStats(pageRecords), [pageRecords]);
+  const viewRecords = useMemo(() => {
+    const derivedRecords: ViewRecord[] = pageRecords.map((record, index) => {
+      const override = recordOverrides[record.id] || {};
+      return {
+        id: record.id,
+        title: override.title ?? record.title,
+        excerpt: override.excerpt ?? record.excerpt,
+        notes: override.notes ?? record.excerpt,
+        status: (override.status as KanbanStatus | undefined) ?? (record.status as KanbanStatus | undefined) ?? 'Other',
+        date: override.date ?? record.date ?? '',
+        startDate: override.startDate ?? record.startDate ?? record.date ?? '',
+        endDate: override.endDate ?? record.endDate ?? record.startDate ?? record.date ?? '',
+        image: override.image ?? record.image,
+        typeLabel: override.typeLabel ?? record.typeLabel,
+        source: 'page',
+        order: override.order ?? index,
+      };
+    });
+
+    return [...derivedRecords, ...manualViewRecords].sort((left, right) => left.order - right.order);
+  }, [manualViewRecords, pageRecords, recordOverrides]);
+
+  useEffect(() => {
+    if (!showViewsMenu) return;
+    const onDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (viewsMenuRef.current?.contains(target)) return;
+      setShowViewsMenu(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [showViewsMenu]);
+
+  useEffect(() => {
+    if (!selectedViewRecordId) return;
+    if (viewRecords.some((record) => record.id === selectedViewRecordId)) return;
+    setSelectedViewRecordId(null);
+  }, [selectedViewRecordId, viewRecords]);
+
+  useEffect(() => {
+    const savedState = readPageViewsState(pageViewsStorageKey);
+    const nextEnabledViews: PageViewId[] = savedState?.enabledViews?.length
+      ? Array.from(new Set<PageViewId>([
+          'page',
+          ...savedState.enabledViews.filter((viewId): viewId is PageViewId =>
+            PAGE_VIEW_OPTIONS.some((option) => option.id === viewId)
+          ),
+        ]))
+      : ['page'];
+    const nextActiveView = savedState?.activeView && nextEnabledViews.includes(savedState.activeView)
+      ? savedState.activeView
+      : 'page';
+
+    setEnabledViews(nextEnabledViews);
+    setActiveView(nextActiveView);
+    setRecordOverrides(savedState?.recordOverrides || {});
+    setManualViewRecords(savedState?.manualViewRecords || []);
+    setSelectedViewRecordId(null);
+  }, [pageViewsStorageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(pageViewsStorageKey, JSON.stringify({
+        enabledViews,
+        activeView,
+        recordOverrides,
+        manualViewRecords,
+      }));
+    } catch {
+      // Ignore storage errors and keep local in-memory state.
+    }
+  }, [activeView, enabledViews, manualViewRecords, pageViewsStorageKey, recordOverrides]);
+
+  const addOrActivateView = useCallback((viewId: PageViewId) => {
+    const view = PAGE_VIEW_OPTIONS.find((item) => item.id === viewId);
+    if (!view) return;
+    setEnabledViews((prev) => (prev.includes(viewId) ? prev : [...prev, viewId]));
+    setActiveView(viewId);
+    setShowViewsMenu(false);
+    setViewsHint(null);
+  }, []);
+
+  const removeView = useCallback((viewId: PageViewId) => {
+    if (viewId === 'page') return;
+    setEnabledViews((prev) => {
+      const next: PageViewId[] = prev.filter((id) => id !== viewId);
+      const safeNext: PageViewId[] = next.length > 0 ? next : ['page'];
+      if (activeView === viewId) {
+        setActiveView((safeNext[0] as PageViewId) ?? 'page');
+      }
+      return safeNext;
+    });
+    setViewsHint(null);
+  }, [activeView]);
+
+  const createViewRecord = useCallback((seed?: Partial<ViewRecord>) => {
+    const maxOrder = viewRecords.reduce((max, record) => Math.max(max, record.order), -1);
+    const recordId = `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const nextRecord: ViewRecord = {
+      id: recordId,
+      title: seed?.title?.trim() || 'Новая запись',
+      excerpt: seed?.excerpt || '',
+      notes: seed?.notes || '',
+      status: seed?.status || 'To Do',
+      date: seed?.date || '',
+      startDate: seed?.startDate || seed?.date || '',
+      endDate: seed?.endDate || seed?.startDate || seed?.date || '',
+      image: seed?.image,
+      typeLabel: seed?.typeLabel || 'Запись',
+      source: 'manual',
+      order: maxOrder + 1,
+    };
+    setManualViewRecords((prev) => [...prev, nextRecord]);
+    setViewsHint('Запись создана');
+    window.setTimeout(() => setViewsHint(null), 1400);
+    return recordId;
+  }, [viewRecords]);
+
+  const updateViewRecord = useCallback((recordId: string, patch: Partial<ViewRecord>) => {
+    setManualViewRecords((prev) => {
+      let changed = false;
+      const next = prev.map((record) => {
+        if (record.id !== recordId) return record;
+        changed = true;
+        return { ...record, ...patch };
+      });
+      return changed ? next : prev;
+    });
+
+    if (!manualViewRecords.some((record) => record.id === recordId)) {
+      setRecordOverrides((prev) => ({
+        ...prev,
+        [recordId]: {
+          ...(prev[recordId] || {}),
+          ...patch,
+        },
+      }));
+    }
+  }, [manualViewRecords]);
+
+  const deleteViewRecord = useCallback((recordId: string) => {
+    setManualViewRecords((prev) => prev.filter((record) => record.id !== recordId));
+    if (selectedViewRecordId === recordId) setSelectedViewRecordId(null);
+    setViewsHint('Запись удалена');
+    window.setTimeout(() => setViewsHint(null), 1400);
+  }, [selectedViewRecordId]);
+
+  const reorderViewRecords = useCallback((draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+    const orderedIds = viewRecords.map((record) => record.id);
+    const fromIndex = orderedIds.indexOf(draggedId);
+    const toIndex = orderedIds.indexOf(targetId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    orderedIds.splice(fromIndex, 1);
+    orderedIds.splice(toIndex, 0, draggedId);
+
+    setManualViewRecords((prev) =>
+      prev
+        .map((record) => {
+          const nextOrder = orderedIds.indexOf(record.id);
+          return nextOrder === -1 ? record : { ...record, order: nextOrder };
+        })
+        .sort((left, right) => left.order - right.order)
+    );
+
+    setRecordOverrides((prev) => {
+      const next = { ...prev };
+      orderedIds.forEach((id, index) => {
+        next[id] = { ...(next[id] || {}), order: index };
+      });
+      return next;
+    });
+  }, [viewRecords]);
 
   useEffect(() => {
     if (!spaceId || !pageId) return;
@@ -222,7 +471,7 @@ export default function PageEditor() {
         setContent(nextContent);
         skipTitleDebounceRef.current = true;
       } catch {
-        /* страница не загрузилась */
+        /* РЎРѓРЎвЂљРЎР‚Р В°Р Р…Р С‘РЎвЂ Р В° Р Р…Р Вµ Р В·Р В°Р С–РЎР‚РЎС“Р В·Р С‘Р В»Р В°РЎРѓРЎРЉ */
       } finally {
         if (mounted) setLoading(false);
       }
@@ -233,7 +482,7 @@ export default function PageEditor() {
     };
   }, [draftStorageKey, pageId]);
 
-  // заголовок сохраняем отдельной задержкой, чтобы не плодить ревизии контента на каждую букву
+  // Р В·Р В°Р С–Р С•Р В»Р С•Р Р†Р С•Р С” РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С•РЎвЂљР Т‘Р ВµР В»РЎРЉР Р…Р С•Р в„– Р В·Р В°Р Т‘Р ВµРЎР‚Р В¶Р С”Р С•Р в„–, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р Р…Р Вµ Р С—Р В»Р С•Р Т‘Р С‘РЎвЂљРЎРЉ РЎР‚Р ВµР Р†Р С‘Р В·Р С‘Р С‘ Р С”Р С•Р Р…РЎвЂљР ВµР Р…РЎвЂљР В° Р Р…Р В° Р С”Р В°Р В¶Р Т‘РЎС“РЎР‹ Р В±РЎС“Р С”Р Р†РЎС“
   useEffect(() => {
     if (!pageId) return;
     if (skipTitleDebounceRef.current) {
@@ -597,6 +846,23 @@ export default function PageEditor() {
     }
   };
 
+  const handleViewRecordImageUpload = useCallback(async (recordId: string, file: File) => {
+    if (!['image/jpeg', 'image/png', 'image/gif'].includes(file.type)) {
+      alert('Поддерживаются только JPG, PNG и GIF');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Файл слишком большой. Максимум 5 МБ.');
+      return;
+    }
+    try {
+      const url = await api.uploadImage(file);
+      updateViewRecord(recordId, { image: url });
+    } catch (e) {
+      alert('Не удалось загрузить изображение: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }, [updateViewRecord]);
+
   const runToolbarAction = (action: string) => {
     if (!editorInstance) return;
     const chain = editorInstance.chain().focus();
@@ -643,7 +909,7 @@ export default function PageEditor() {
   }, []);
 
   if ((pageId || location.pathname === '/new') && authLoading) {
-    return <div className="loading">Загрузка…</div>;
+    return <div className="loading">Загрузка...</div>;
   }
 
   if (!authLoading && !user && (pageId || location.pathname === '/new')) {
@@ -655,18 +921,86 @@ export default function PageEditor() {
   }
 
   if (pageId && user && !collab) {
-    return <div className="loading">Подключение совместного редактора…</div>;
+    return <div className="loading">Подключение совместного редактора...</div>;
   }
 
   return (
     <div className="editor-shell">
+      <div className="page-views-strip">
+        <div className="page-views-tabs">
+          {enabledViews.map((viewId) => {
+            const view = PAGE_VIEW_OPTIONS.find((item) => item.id === viewId);
+            if (!view) return null;
+            return (
+              <div
+                key={viewId}
+                className={`page-view-tab${activeView === viewId ? ' active' : ''}`}
+              >
+                <button
+                  type="button"
+                  className="page-view-tab-main"
+                  onClick={() => setActiveView(viewId)}
+                >
+                  <span className="page-view-tab-icon">{view.icon}</span>
+                  <span>{view.label}</span>
+                </button>
+                {viewId !== 'page' && (
+                  <button
+                    type="button"
+                    className="page-view-tab-remove"
+                    title="Удалить представление"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removeView(viewId);
+                    }}
+                  >
+                    x
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="page-views-add" ref={viewsMenuRef}>
+          <button
+            type="button"
+            className="page-views-add-btn"
+            onClick={() => setShowViewsMenu((prev) => !prev)}
+          >
+            + Добавить представление
+          </button>
+          {showViewsMenu && (
+            <div className="page-views-menu">
+              <div className="page-views-menu-title">Добавить представление</div>
+              {PAGE_VIEW_OPTIONS.map((view) => (
+                <button
+                  key={view.id}
+                  type="button"
+                  className={`page-views-menu-item${view.working ? '' : ' is-placeholder'}`}
+                  onClick={() => addOrActivateView(view.id)}
+                >
+                  <span className="page-views-menu-left">
+                    <span className="page-views-menu-icon">{view.icon}</span>
+                    <span>{view.label}</span>
+                  </span>
+                  <span className="page-views-menu-plus">
+                    {enabledViews.includes(view.id) ? '✓' : '+'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      {viewsHint && <div className="page-views-hint">{viewsHint}</div>}
+
       <div className="editor-toolbar-line">
         <div className="toolbar-group">
-          <button className="toolbar-btn" title="undo" onClick={() => runToolbarAction('undo')}>
-            ↶
+          <button className="toolbar-btn" title="Отменить" onClick={() => runToolbarAction('undo')}>
+            Undo
           </button>
-          <button className="toolbar-btn" title="redo" onClick={() => runToolbarAction('redo')}>
-            ↷
+          <button className="toolbar-btn" title="Повторить" onClick={() => runToolbarAction('redo')}>
+            Redo
           </button>
         </div>
         <div className="toolbar-group">
@@ -677,11 +1011,11 @@ export default function PageEditor() {
             { id: 'h1', label: 'H1' },
             { id: 'h2', label: 'H2' },
             { id: 'h3', label: 'H3' },
-            { id: 'bullet', label: '•' },
+            { id: 'bullet', label: '*' },
             { id: 'ordered', label: '1.' },
-            { id: 'quote', label: '❝' },
+            { id: 'quote', label: '"' },
             { id: 'code', label: '</>' },
-            { id: 'rule', label: '—' },
+            { id: 'rule', label: '-' },
             { id: 'link', label: '@' },
             { id: 'pageLink', label: '[[' },
           ].map((item) => (
@@ -700,7 +1034,7 @@ export default function PageEditor() {
             💬
           </button>
           <button className="toolbar-btn" onClick={() => setShowImageModal(true)} title="Вставить изображение">
-            🖼
+            Img
           </button>
           <button className="toolbar-btn" onClick={insertAiBlock} title="ai">
             AI
@@ -735,7 +1069,7 @@ export default function PageEditor() {
                 onFocusHandled={() => setFocusedCanvasCommentId(null)}
               />
             )}
-            <div className="page-editor-container">
+            <div className={`page-editor-container${activeView === 'page' ? '' : ' page-editor-container--view'}`}>
             <input
               className="page-title-input"
               value={title}
@@ -750,20 +1084,44 @@ export default function PageEditor() {
               placeholder="Краткое описание (необязательно)"
             />
             <SaveStatus isSaving={isSaving} lastSavedAt={lastSavedAt} error={saveError} pendingChanges={pendingChanges} />
-            <Editor
-              key={pageId ? `${pageId}-${collab ? 'y' : 'n'}` : 'draft'}
-              content={content}
-              onUpdate={setContent}
-              onSave={saveNow}
-              onInsertMwsTable={openTablePicker}
-              onInsertPageLink={openPageLinkModal}
-              onInsertAiBlock={insertAiBlock}
-              onEditorReady={setEditorInstance}
-              onRequestLinkEdit={openLinkPopover}
-              collab={pageId ? collab : null}
-              collabUser={collabUserInfo}
-              currentSpaceId={spaceId ?? null}
-            />
+            {activeView === 'page' ? (
+              <Editor
+                key={pageId ? `${pageId}-${collab ? 'y' : 'n'}` : 'draft'}
+                content={content}
+                onUpdate={setContent}
+                onSave={saveNow}
+                onInsertMwsTable={openTablePicker}
+                onInsertPageLink={openPageLinkModal}
+                onInsertAiBlock={insertAiBlock}
+                onEditorReady={setEditorInstance}
+                onRequestLinkEdit={openLinkPopover}
+                collab={pageId ? collab : null}
+                collabUser={collabUserInfo}
+                currentSpaceId={spaceId ?? null}
+              />
+            ) : activeView === 'architecture' || activeView === 'grid' || activeView === 'gallery' || activeView === 'kanban' || activeView === 'calendar' || activeView === 'gantt' || activeView === 'form' ? (
+              <PageViews
+                activeView={activeView}
+                activeViewLabel={activeViewMeta.label}
+                records={viewRecords}
+                selectedRecordId={selectedViewRecordId}
+                architectureStats={architectureStats}
+                onSelectRecord={setSelectedViewRecordId}
+                onCreateRecord={createViewRecord}
+                onUpdateRecord={updateViewRecord}
+                onDeleteRecord={deleteViewRecord}
+                onReorderRecords={reorderViewRecords}
+                onUploadRecordImage={handleViewRecordImageUpload}
+              />
+            ) : (
+              <div className="page-grid-view">
+                <div className="page-grid-view-head">
+                  <span className="page-grid-view-title">{activeViewMeta.label}</span>
+                  <span className="page-grid-view-note">Представление</span>
+                </div>
+                <div className="page-grid-empty">Это представление пока недоступно</div>
+              </div>
+            )}
 
             {pageId && <Backlinks pageId={pageId} currentSpaceId={spaceId ?? null} />}
             </div>
@@ -772,7 +1130,7 @@ export default function PageEditor() {
 
       </div>
 
-      {/* ── Floating: Комментарии (карточки) ── */}
+      {/* РІвЂќР‚РІвЂќР‚ Floating: Р С™Р С•Р СР СР ВµР Р…РЎвЂљР В°РЎР‚Р С‘Р С‘ (Р С”Р В°РЎР‚РЎвЂљР С•РЎвЂЎР С”Р С‘) РІвЂќР‚РІвЂќР‚ */}
       {pageId && (
         <FloatingComments
           pageId={pageId}
@@ -783,7 +1141,7 @@ export default function PageEditor() {
         />
       )}
 
-      {/* ── Floating: Машина времени ── */}
+      {/* РІвЂќР‚РІвЂќР‚ Floating: Р СљР В°РЎв‚¬Р С‘Р Р…Р В° Р Р†РЎР‚Р ВµР СР ВµР Р…Р С‘ РІвЂќР‚РІвЂќР‚ */}
       {showTimeline && (
         <FloatingPanel
           title="Машина времени"
@@ -952,7 +1310,7 @@ export default function PageEditor() {
                 onClick={() => !imageUploading && setShowImageModal(false)}
                 disabled={imageUploading}
               >
-                ×
+                x
               </button>
             </div>
             <div
@@ -978,10 +1336,10 @@ export default function PageEditor() {
               }}
             >
               {imageUploading ? (
-                <div className="image-upload-spinner">Загрузка…</div>
+                <div className="image-upload-spinner">Загрузка...</div>
               ) : (
                 <>
-                  <span className="image-upload-icon">🖼</span>
+                  <span className="image-upload-icon">Img</span>
                   <span className="image-upload-hint">
                     <span className="image-upload-link">Выберите файл</span> или перетащите его сюда
                   </span>
@@ -1006,10 +1364,10 @@ export default function PageEditor() {
         <div className="ai-floating-panel">
           <div className="ai-floating-header">
             <span>AI-помощник</span>
-            <button className="ai-floating-close" onClick={() => setShowAiPanel(false)}>×</button>
+            <button className="ai-floating-close" onClick={() => setShowAiPanel(false)}>x</button>
           </div>
           <div className="ai-floating-body">
-            {/* Переключатель режима */}
+            {/* Р СџР ВµРЎР‚Р ВµР С”Р В»РЎР‹РЎвЂЎР В°РЎвЂљР ВµР В»РЎРЉ РЎР‚Р ВµР В¶Р С‘Р СР В° */}
             <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
               <button
                 className={`toolbar-btn${aiMode === 'page' ? ' active' : ''}`}
@@ -1044,7 +1402,7 @@ export default function PageEditor() {
                 onChange={(e) => setAiShareContext(e.target.checked)}
                 disabled={aiLoading}
               />
-              Отправлять контекст страниц в AI
+              Отправлять контекст страницы в AI
             </label>
             <div className="ai-block-actions">
               {aiLoading ? (
@@ -1055,7 +1413,7 @@ export default function PageEditor() {
                 </button>
               )}
             </div>
-            {/* Результат поиска по всем документам */}
+            {/* Р В Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљ Р С—Р С•Р С‘РЎРѓР С”Р В° Р С—Р С• Р Р†РЎРѓР ВµР С Р Т‘Р С•Р С”РЎС“Р СР ВµР Р…РЎвЂљР В°Р С */}
             {aiResult && (
               <div style={{
                 marginTop: 10,
@@ -1094,4 +1452,125 @@ function extractText(node: JSONContent | JSONContent[] | string | undefined): st
   if (node.text) return String(node.text);
   if (node.content) return extractText(node.content);
   return '';
+}
+
+type PageRecord = {
+  id: string;
+  type: string;
+  typeLabel: string;
+  title: string;
+  excerpt: string;
+  date?: string;
+  startDate?: string;
+  endDate?: string;
+  status?: string;
+  image?: string;
+  pageLinks: number;
+  tableLinks: number;
+};
+
+function buildPageRecords(doc: JSONContent): PageRecord[] {
+  if (!doc || doc.type !== 'doc' || !Array.isArray(doc.content)) return [];
+
+  const typeLabels: Record<string, string> = {
+    heading: 'Заголовок',
+    paragraph: 'Текст',
+    bulletList: 'Список',
+    orderedList: 'Список',
+    blockquote: 'Цитата',
+    codeBlock: 'Код',
+    image: 'Изображение',
+    table: 'Таблица',
+    mwsTable: 'Таблица MWS',
+  };
+
+  const result: PageRecord[] = [];
+  for (let index = 0; index < doc.content.length; index += 1) {
+    const node = doc.content[index];
+    if (!node) continue;
+    const type = node.type || 'block';
+    const text = extractText(node).replace(/\s+/g, ' ').trim();
+    const attrs = (node.attrs || {}) as Record<string, unknown>;
+    const imageSrc = type === 'image' && typeof attrs.src === 'string' ? attrs.src : undefined;
+    if (!text && !imageSrc && type !== 'mwsTable' && type !== 'table') continue;
+
+    const title =
+      type === 'image'
+        ? 'Изображение'
+        : type === 'mwsTable'
+          ? 'Таблица MWS'
+          : text.slice(0, 90);
+    const excerpt =
+      type === 'image' || type === 'mwsTable' || type === 'table'
+        ? ''
+        : text.length > 90
+          ? text.slice(90, 230)
+          : '';
+
+    const { date, startDate, endDate } = parseDateFields(text);
+    const status = inferStatus(text);
+    const pageLinks = (text.match(/\[\[[^\]]+\]\]/g) || []).length;
+    const tableLinks = type === 'mwsTable' || type === 'table' ? 1 : 0;
+
+    result.push({
+      id: `${type}-${index}`,
+      type,
+      typeLabel: typeLabels[type] || 'Блок',
+      title: title || 'Пустой блок',
+      excerpt,
+      date,
+      startDate,
+      endDate,
+      status,
+      image: imageSrc,
+      pageLinks,
+      tableLinks,
+    });
+  }
+
+  return result;
+}
+
+function buildArchitectureStats(records: PageRecord[]): { typeCounts: Record<string, number>; pageLinks: number; tableLinks: number } {
+  const typeCounts: Record<string, number> = {};
+  let pageLinks = 0;
+  let tableLinks = 0;
+  for (const record of records) {
+    typeCounts[record.type] = (typeCounts[record.type] || 0) + 1;
+    pageLinks += record.pageLinks;
+    tableLinks += record.tableLinks;
+  }
+  return { typeCounts, pageLinks, tableLinks };
+}
+
+function inferStatus(text: string): 'To Do' | 'In Progress' | 'Done' | 'Other' {
+  const value = text.toLowerCase();
+  if (/(todo|to do|нужно|план|backlog)/.test(value)) return 'To Do';
+  if (/(progress|в работе|doing|started)/.test(value)) return 'In Progress';
+  if (/(done|готово|завершено|closed|выполнено)/.test(value)) return 'Done';
+  return 'Other';
+}
+
+function normalizeDate(raw: string): string | undefined {
+  if (!raw) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const dot = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (dot) return `${dot[3]}-${dot[2]}-${dot[1]}`;
+  return undefined;
+}
+
+function parseDateFields(text: string): { date?: string; startDate?: string; endDate?: string } {
+  const normalizedText = text.replace(/\s+/g, ' ');
+  const range = normalizedText.match(/(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})\s*[-—]\s*(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})/);
+  if (range) {
+    const startDate = normalizeDate(range[1] || '');
+    const endDate = normalizeDate(range[2] || '');
+    return { date: startDate, startDate, endDate };
+  }
+  const single = normalizedText.match(/(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})/);
+  if (single) {
+    const date = normalizeDate(single[1] || '');
+    return { date, startDate: date, endDate: date };
+  }
+  return {};
 }
