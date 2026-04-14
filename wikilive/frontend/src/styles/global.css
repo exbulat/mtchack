@@ -1164,31 +1164,131 @@ strong { color: var(--text); font-weight: 600; }
   padding: 6px;
 }
 
+.page-gantt-surface {
+  overflow: hidden;
+  padding-bottom: 6px;
+  min-width: 0;
+}
+
 .page-gantt {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
+}
+
+.page-gantt-header-row {
+  display: grid;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+
+.page-gantt-header-spacer {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+}
+
+.page-gantt-header-spacer-content {
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 8px;
+}
+
+.page-gantt-header-spacer-content.is-collapsed {
+  justify-content: center;
+  padding-right: 0;
+}
+
+.page-gantt-pane-toggle {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 90%, white 10%);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.page-gantt-pane-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-dim) 68%, var(--surface));
+}
+
+.page-gantt-header-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.page-gantt-header-caption strong {
+  font-size: 13px;
+}
+
+.page-gantt-header-caption span {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.page-gantt-header-timeline {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.page-gantt-months {
+  display: grid;
+  min-width: 0;
+}
+
+.page-gantt-month-segment {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  padding-bottom: 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .page-gantt-scale {
   display: grid;
-  grid-template-columns: repeat(31, minmax(0, 1fr));
-  gap: 6px;
-  margin-bottom: 4px;
+  min-width: 0;
 }
 
 .page-gantt-scale span {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
   font-size: 10px;
   color: var(--text-muted);
-  text-align: center;
-  padding-bottom: 2px;
+  padding: 2px 0 4px;
+}
+
+.page-gantt-scale span strong {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.page-gantt-scale span.is-today strong,
+.page-gantt-scale span.is-today small {
+  color: var(--accent-border);
 }
 
 .page-gantt-row {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) 1fr;
-  gap: 16px;
+  gap: 12px;
   align-items: stretch;
+  min-width: 0;
 }
 
 .page-gantt-label {
@@ -1203,6 +1303,10 @@ strong { color: var(--text); font-weight: 600; }
   cursor: pointer;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
   transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  min-height: 82px;
 }
 
 .page-gantt-label:hover,
@@ -1258,9 +1362,10 @@ strong { color: var(--text); font-weight: 600; }
   background:
     linear-gradient(90deg, rgba(15, 23, 42, 0.03) 1px, transparent 1px),
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, white 8%), color-mix(in srgb, var(--bg-secondary) 82%, white 18%));
-  background-size: calc(100% / 31) 100%, 100% 100%;
+  background-size: 56px 100%, 100% 100%;
   overflow: hidden;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.45);
+  min-width: 0;
 }
 
 .page-gantt-bar {
@@ -1296,6 +1401,37 @@ strong { color: var(--text); font-weight: 600; }
   height: 100%;
   cursor: ew-resize;
   flex: 0 0 auto;
+}
+
+.page-gantt-toolbar {
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.page-gantt-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.page-gantt-nav strong {
+  min-width: 112px;
+  font-size: 13px;
+}
+
+.page-gantt-range-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.page-gantt-collapsed-slot {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-height: 82px;
 }
 
 .page-gantt-modal {
@@ -1574,6 +1710,22 @@ strong { color: var(--text); font-weight: 600; }
 
   .page-gantt-row {
     grid-template-columns: 1fr;
+  }
+
+  .page-gantt-header-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .page-gantt-header-spacer {
+    position: static;
+  }
+
+  .page-gantt-label {
+    position: static;
+  }
+
+  .page-gantt-collapsed-slot {
+    display: none;
   }
 
   .page-gantt-modal-fields {

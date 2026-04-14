@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
 export type KanbanStatus = 'To Do' | 'In Progress' | 'Done' | 'Other';
 
@@ -100,6 +100,40 @@ function formatShortDate(date: string): string {
   });
 }
 
+function parseDate(date: string): Date | null {
+  if (!date) return null;
+  const parsed = new Date(`${date}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatIsoDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function addDays(date: string, delta: number): string {
+  const parsed = parseDate(date);
+  if (!parsed) return date;
+  parsed.setDate(parsed.getDate() + delta);
+  return formatIsoDate(parsed);
+}
+
+function diffDays(from: string, to: string): number {
+  const fromDate = parseDate(from);
+  const toDate = parseDate(to);
+  if (!fromDate || !toDate) return 0;
+  return Math.round((toDate.getTime() - fromDate.getTime()) / 86400000);
+}
+
+function monthKeyFromDate(date: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date.slice(0, 7) : getMonthKey();
+}
+
+function formatWeekdayShort(date: string): string {
+  const parsed = parseDate(date);
+  if (!parsed) return '';
+  return parsed.toLocaleDateString('ru-RU', { weekday: 'short' });
+}
+
 export default function PageViews({
   activeView,
   activeViewLabel,
@@ -113,9 +147,17 @@ export default function PageViews({
   onReorderRecords,
   onUploadRecordImage,
 }: PageViewsProps) {
+  const GANTT_DAY_WIDTH = 56;
+  const GANTT_SIDE_WIDTH = 280;
+  const GANTT_COLLAPSED_WIDTH = 34;
+  const GANTT_VISIBLE_DAYS = 16;
+  const GANTT_NAV_STEP = 7;
   const dragRecordRef = useRef<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthKey(records.find((record) => record.date)?.date));
-  const [ganttMonth, setGanttMonth] = useState(() => getMonthKey(records.find((record) => record.startDate || record.date)?.startDate || records.find((record) => record.date)?.date));
+  const [ganttCenterDate, setGanttCenterDate] = useState(
+    () => records.find((record) => record.startDate || record.date)?.startDate || records.find((record) => record.date)?.date || formatIsoDate(new Date())
+  );
+  const [isGanttSidebarCollapsed, setIsGanttSidebarCollapsed] = useState(false);
   const [calendarDraft, setCalendarDraft] = useState(() => ({
     title: '',
     date: toDateString(getMonthKey(), 1),
@@ -123,8 +165,8 @@ export default function PageViews({
   const [showGanttCreateModal, setShowGanttCreateModal] = useState(false);
   const [ganttDraft, setGanttDraft] = useState(() => ({
     title: '',
-    startDate: toDateString(getMonthKey(), 1),
-    endDate: toDateString(getMonthKey(), Math.min(3, getDaysInMonth(getMonthKey()))),
+    startDate: formatIsoDate(new Date()),
+    endDate: addDays(formatIsoDate(new Date()), 2),
     status: 'To Do' as KanbanStatus,
     notes: '',
   }));
@@ -133,10 +175,8 @@ export default function PageViews({
     mode: 'move' | 'start' | 'end';
     startX: number;
     pxPerDay: number;
-    startDay: number;
-    endDay: number;
-    daysInMonth: number;
-    monthKey: string;
+    startDate: string;
+    endDate: string;
   }>(null);
 
   const sortedRecords = useMemo(
@@ -145,7 +185,6 @@ export default function PageViews({
   );
   const selectedRecord = sortedRecords.find((record) => record.id === selectedRecordId) ?? null;
   const calendarDays = getDaysInMonth(calendarMonth);
-  const ganttDays = getDaysInMonth(ganttMonth);
 
   useEffect(() => {
     if (!selectedRecordId) return;
@@ -154,35 +193,40 @@ export default function PageViews({
   }, [onSelectRecord, selectedRecordId, sortedRecords]);
 
   useEffect(() => {
+    const nextCenter = records.find((record) => record.startDate || record.date)?.startDate || records.find((record) => record.date)?.date;
+    if (!nextCenter) return;
+    setGanttCenterDate((prev) => prev || nextCenter);
+  }, [records]);
+
+  useEffect(() => {
     if (!ganttDrag) return;
 
     const onMove = (event: MouseEvent) => {
       const deltaDays = Math.round((event.clientX - ganttDrag.startX) / ganttDrag.pxPerDay);
-      const span = ganttDrag.endDay - ganttDrag.startDay;
 
       if (ganttDrag.mode === 'move') {
-        const nextStart = clamp(ganttDrag.startDay + deltaDays, 1, Math.max(1, ganttDrag.daysInMonth - span));
-        const nextEnd = clamp(nextStart + span, nextStart, ganttDrag.daysInMonth);
         onUpdateRecord(ganttDrag.id, {
-          startDate: toDateString(ganttDrag.monthKey, nextStart),
-          endDate: toDateString(ganttDrag.monthKey, nextEnd),
-          date: toDateString(ganttDrag.monthKey, nextStart),
+          startDate: addDays(ganttDrag.startDate, deltaDays),
+          endDate: addDays(ganttDrag.endDate, deltaDays),
+          date: addDays(ganttDrag.startDate, deltaDays),
         });
         return;
       }
 
       if (ganttDrag.mode === 'start') {
-        const nextStart = clamp(ganttDrag.startDay + deltaDays, 1, ganttDrag.endDay);
+        const nextStart = addDays(ganttDrag.startDate, deltaDays);
+        if (diffDays(nextStart, ganttDrag.endDate) < 0) return;
         onUpdateRecord(ganttDrag.id, {
-          startDate: toDateString(ganttDrag.monthKey, nextStart),
-          date: toDateString(ganttDrag.monthKey, nextStart),
+          startDate: nextStart,
+          date: nextStart,
         });
         return;
       }
 
-      const nextEnd = clamp(ganttDrag.endDay + deltaDays, ganttDrag.startDay, ganttDrag.daysInMonth);
+      const nextEnd = addDays(ganttDrag.endDate, deltaDays);
+      if (diffDays(ganttDrag.startDate, nextEnd) < 0) return;
       onUpdateRecord(ganttDrag.id, {
-        endDate: toDateString(ganttDrag.monthKey, nextEnd),
+        endDate: nextEnd,
       });
     };
 
@@ -234,11 +278,10 @@ export default function PageViews({
   }
 
   function openGanttCreateModal(): void {
-    const monthDays = getDaysInMonth(ganttMonth);
     setGanttDraft({
       title: '',
-      startDate: toDateString(ganttMonth, 1),
-      endDate: toDateString(ganttMonth, Math.min(3, monthDays)),
+      startDate: ganttCenterDate,
+      endDate: addDays(ganttCenterDate, 2),
       status: 'To Do',
       notes: '',
     });
@@ -535,18 +578,57 @@ export default function PageViews({
 
   function renderGantt() {
     const ganttRecords = sortedRecords.filter((record) => record.startDate || record.date);
+    const timelineStart = addDays(ganttCenterDate, -Math.floor(GANTT_VISIBLE_DAYS / 2));
+    const timelineDays = Array.from({ length: GANTT_VISIBLE_DAYS }, (_, index) =>
+      addDays(timelineStart, index)
+    );
+    const timelineGrid = `repeat(${timelineDays.length}, minmax(0, 1fr))`;
+    const timelineBackgroundSize = `calc(100% / ${timelineDays.length}) 100%, 100% 100%`;
+    const sidebarWidth = isGanttSidebarCollapsed ? GANTT_COLLAPSED_WIDTH : GANTT_SIDE_WIDTH;
+    const monthSegments = timelineDays.reduce<Array<{ key: string; label: string; span: number }>>((segments, day) => {
+      const key = monthKeyFromDate(day);
+      const last = segments[segments.length - 1];
+      if (last && last.key === key) {
+        last.span += 1;
+      } else {
+        segments.push({ key, label: formatMonthLabel(key), span: 1 });
+      }
+      return segments;
+    }, []);
 
     return (
       <div className="page-grid-view">
         <div className="page-grid-view-head">
           <span className="page-grid-view-title">Гант</span>
-          <span className="page-grid-view-note">Полосу можно двигать и растягивать за края</span>
+          <span className="page-grid-view-note">Левая колонка закреплена, а шкала двигается стрелками по бесконечной ленте дат.</span>
         </div>
-        <div className="page-view-toolbar">
-          <div className="page-view-month-switcher">
-            <button type="button" className="btn btn-ghost" onClick={() => setGanttMonth((prev) => shiftMonth(prev, -1))}>Назад</button>
-            <strong>{formatMonthLabel(ganttMonth)}</strong>
-            <button type="button" className="btn btn-ghost" onClick={() => setGanttMonth((prev) => shiftMonth(prev, 1))}>Вперёд</button>
+        <div className="page-view-toolbar page-gantt-toolbar">
+          <div className="page-gantt-nav">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setGanttCenterDate((prev) => addDays(prev, -GANTT_NAV_STEP))}
+            >
+              ←
+            </button>
+            <strong>{formatMonthLabel(monthKeyFromDate(ganttCenterDate))}</strong>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setGanttCenterDate((prev) => addDays(prev, GANTT_NAV_STEP))}
+            >
+              →
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setGanttCenterDate(formatIsoDate(new Date()))}
+            >
+              Сегодня
+            </button>
+            <span className="page-gantt-range-label">
+              {formatShortDate(timelineStart)} - {formatShortDate(addDays(timelineStart, timelineDays.length - 1))}
+            </span>
           </div>
           <button
             type="button"
@@ -556,92 +638,124 @@ export default function PageViews({
             Новый этап
           </button>
         </div>
-        <div className="page-gantt-scale">
-          {Array.from({ length: ganttDays }, (_, index) => (
-            <span key={index}>{index + 1}</span>
-          ))}
-        </div>
-        <div className="page-gantt">
-          {ganttRecords.length > 0 ? ganttRecords.map((item) => {
-            const start = item.startDate || item.date || toDateString(ganttMonth, 1);
-            const end = item.endDate || start;
-            const startDay = getDayNumber(start, ganttMonth);
-            const endDay = getDayNumber(end, ganttMonth);
-            const left = ((startDay - 1) / ganttDays) * 100;
-            const width = (Math.max(1, endDay - startDay + 1) / ganttDays) * 100;
-            const duration = Math.max(1, endDay - startDay + 1);
-            return (
-              <div key={item.id} className="page-gantt-row">
+        <div className="page-gantt-surface">
+          <div className="page-gantt-header-row" style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}>
+            <div className="page-gantt-header-spacer">
+              <div className={`page-gantt-header-spacer-content${isGanttSidebarCollapsed ? ' is-collapsed' : ''}`}>
                 <button
                   type="button"
-                  className={`page-gantt-label${selectedRecordId === item.id ? ' is-selected' : ''}`}
-                  onClick={() => onSelectRecord(item.id)}
+                  className="page-gantt-pane-toggle"
+                  onClick={() => setIsGanttSidebarCollapsed((prev) => !prev)}
+                  aria-label={isGanttSidebarCollapsed ? 'Открыть список задач' : 'Скрыть список задач'}
+                  title={isGanttSidebarCollapsed ? 'Открыть список задач' : 'Скрыть список задач'}
                 >
-                  <span className={`page-gantt-label-badge is-${statusClassName(item.status)}`}>{statusLabel(item.status)}</span>
-                  <span className="page-gantt-label-title">{item.title}</span>
-                  <span className="page-gantt-label-meta">
-                    {formatShortDate(start)} - {formatShortDate(end)}
-                  </span>
-                  <span className="page-gantt-label-submeta">
-                    {duration} дн. {item.typeLabel ? `• ${item.typeLabel}` : ''}
-                  </span>
+                  {isGanttSidebarCollapsed ? '→' : '←'}
                 </button>
-                <div className="page-gantt-track">
-                  <div
-                    className={`page-gantt-bar${selectedRecordId === item.id ? ' is-selected' : ''}`}
-                    style={{ left: `${left}%`, width: `${width}%` }}
-                    onMouseDown={(event) => {
-                      setGanttDrag({
-                        id: item.id,
-                        mode: 'move',
-                        startX: event.clientX,
-                        pxPerDay: Math.max(8, event.currentTarget.parentElement!.getBoundingClientRect().width / ganttDays),
-                        startDay,
-                        endDay,
-                        daysInMonth: ganttDays,
-                        monthKey: ganttMonth,
-                      });
-                    }}
-                    onClick={() => onSelectRecord(item.id)}
-                  >
-                    <span
-                      className="page-gantt-handle is-start"
+                {!isGanttSidebarCollapsed && (
+                  <div className="page-gantt-header-caption">
+                    <strong>Задачи</strong>
+                    <span>Статичный список этапов</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="page-gantt-header-timeline">
+              <div className="page-gantt-months" style={{ gridTemplateColumns: timelineGrid }}>
+                {monthSegments.map((segment) => (
+                  <div key={segment.key} className="page-gantt-month-segment" style={{ gridColumn: `span ${segment.span}` }}>
+                    {segment.label}
+                  </div>
+                ))}
+              </div>
+              <div className="page-gantt-scale" style={{ gridTemplateColumns: timelineGrid }}>
+                {timelineDays.map((day) => (
+                  <span key={day} className={day === formatIsoDate(new Date()) ? 'is-today' : ''}>
+                    <strong>{Number(day.slice(-2))}</strong>
+                    <small>{formatWeekdayShort(day)}</small>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="page-gantt">
+            {ganttRecords.length > 0 ? ganttRecords.map((item) => {
+              const start = item.startDate || item.date || ganttCenterDate;
+              const end = item.endDate || start;
+              const startOffset = diffDays(timelineStart, start);
+              const duration = Math.max(1, diffDays(start, end) + 1);
+              const left = `${(startOffset / timelineDays.length) * 100}%`;
+              const width = `${(duration / timelineDays.length) * 100}%`;
+              return (
+                <div key={item.id} className="page-gantt-row" style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}>
+                  {isGanttSidebarCollapsed ? (
+                    <div className="page-gantt-collapsed-slot" />
+                  ) : (
+                    <button
+                      type="button"
+                      className={`page-gantt-label${selectedRecordId === item.id ? ' is-selected' : ''}`}
+                      onClick={() => onSelectRecord(item.id)}
+                    >
+                      <span className={`page-gantt-label-badge is-${statusClassName(item.status)}`}>{statusLabel(item.status)}</span>
+                      <span className="page-gantt-label-title">{item.title}</span>
+                      <span className="page-gantt-label-meta">
+                        {formatShortDate(start)} - {formatShortDate(end)}
+                      </span>
+                      <span className="page-gantt-label-submeta">
+                        {duration} дн. {item.typeLabel ? `• ${item.typeLabel}` : ''}
+                      </span>
+                    </button>
+                  )}
+                  <div className="page-gantt-track" style={{ backgroundSize: timelineBackgroundSize }}>
+                    <div
+                      className={`page-gantt-bar${selectedRecordId === item.id ? ' is-selected' : ''}`}
+                      style={{ left, width }}
                       onMouseDown={(event) => {
-                        event.stopPropagation();
                         setGanttDrag({
                           id: item.id,
-                          mode: 'start',
+                          mode: 'move',
                           startX: event.clientX,
-                          pxPerDay: Math.max(8, event.currentTarget.parentElement!.parentElement!.getBoundingClientRect().width / ganttDays),
-                          startDay,
-                          endDay,
-                          daysInMonth: ganttDays,
-                          monthKey: ganttMonth,
+                          pxPerDay: GANTT_DAY_WIDTH,
+                          startDate: start,
+                          endDate: end,
                         });
                       }}
-                    />
-                    <span className="page-gantt-bar-label">{item.title}</span>
-                    <span
-                      className="page-gantt-handle is-end"
-                      onMouseDown={(event) => {
-                        event.stopPropagation();
-                        setGanttDrag({
-                          id: item.id,
-                          mode: 'end',
-                          startX: event.clientX,
-                          pxPerDay: Math.max(8, event.currentTarget.parentElement!.parentElement!.getBoundingClientRect().width / ganttDays),
-                          startDay,
-                          endDay,
-                          daysInMonth: ganttDays,
-                          monthKey: ganttMonth,
-                        });
-                      }}
-                    />
+                      onClick={() => onSelectRecord(item.id)}
+                    >
+                      <span
+                        className="page-gantt-handle is-start"
+                        onMouseDown={(event) => {
+                          event.stopPropagation();
+                          setGanttDrag({
+                            id: item.id,
+                            mode: 'start',
+                            startX: event.clientX,
+                            pxPerDay: GANTT_DAY_WIDTH,
+                            startDate: start,
+                            endDate: end,
+                          });
+                        }}
+                      />
+                      <span className="page-gantt-bar-label">{item.title}</span>
+                      <span
+                        className="page-gantt-handle is-end"
+                        onMouseDown={(event) => {
+                          event.stopPropagation();
+                          setGanttDrag({
+                            id: item.id,
+                            mode: 'end',
+                            startX: event.clientX,
+                            pxPerDay: GANTT_DAY_WIDTH,
+                            startDate: start,
+                            endDate: end,
+                          });
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          }) : <div className="page-grid-empty">Нет записей с корректными диапазонами дат</div>}
+              );
+            }) : <div className="page-grid-empty">Нет записей с корректными диапазонами дат.</div>}
+          </div>
         </div>
       </div>
     );
@@ -780,7 +894,7 @@ export default function PageViews({
           </label>
           <div className="page-view-field-row">
             <label className="page-view-field">
-              <span>Начало</span>
+              <span>Дата начала</span>
               <input
                 className="page-form-input"
                 type="date"
@@ -792,7 +906,7 @@ export default function PageViews({
               />
             </label>
             <label className="page-view-field">
-              <span>Окончание</span>
+              <span>Дата окончания</span>
               <input
                 className="page-form-input"
                 type="date"
@@ -860,7 +974,7 @@ export default function PageViews({
             </div>
           )}
         </div>
-        {renderRecordInspector()}
+        {(activeView !== 'gantt' || selectedRecord) && renderRecordInspector()}
       </div>
       {showGanttCreateModal && (
         <div className="modal-overlay" onClick={() => setShowGanttCreateModal(false)}>
@@ -891,7 +1005,7 @@ export default function PageViews({
                 </select>
               </label>
               <label className="page-view-field">
-                <span>Начало</span>
+                <span>Дата начала</span>
                 <input
                   className="page-form-input"
                   type="date"
@@ -900,7 +1014,7 @@ export default function PageViews({
                 />
               </label>
               <label className="page-view-field">
-                <span>Завершение</span>
+                <span>Дата окончания</span>
                 <input
                   className="page-form-input"
                   type="date"
@@ -932,3 +1046,4 @@ export default function PageViews({
     </>
   );
 }
+
