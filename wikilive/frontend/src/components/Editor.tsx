@@ -18,6 +18,7 @@ import * as Y from 'yjs';
 import { useNavigate } from 'react-router-dom';
 import SlashMenu, { SlashItem } from './SlashMenu';
 import TableEmbed from './TableEmbed';
+import MwsPageEmbed from './MwsPageEmbed';
 import { WikiLink } from '../extensions/WikiLink';
 import { api } from '../lib/api';
 
@@ -26,9 +27,20 @@ function MwsTableNodeView(props: NodeViewProps) {
   const title = (props.node.attrs.title as string) || '';
   const viewId = (props.node.attrs.viewId as string) || '';
   const viewName = (props.node.attrs.viewName as string) || '';
+  const viewType = (props.node.attrs.viewType as string) || '';
   return (
     <NodeViewWrapper className="mws-table-node-view" data-drag-handle="">
-      <TableEmbed dstId={dstId} title={title} viewId={viewId} viewName={viewName} />
+      <TableEmbed dstId={dstId} title={title} viewId={viewId} viewName={viewName} viewType={viewType} />
+    </NodeViewWrapper>
+  );
+}
+
+function MwsPageNodeView(props: NodeViewProps) {
+  const nodeId = props.node.attrs.nodeId as string;
+  const title = (props.node.attrs.title as string) || '';
+  return (
+    <NodeViewWrapper className="mws-page-node-view" data-drag-handle="">
+      <MwsPageEmbed nodeId={nodeId} title={title} />
     </NodeViewWrapper>
   );
 }
@@ -46,6 +58,7 @@ const MwsTableExtension = Node.create({
       title: { default: '' },
       viewId: { default: '' },
       viewName: { default: '' },
+      viewType: { default: '' },
     };
   },
   parseHTML() {
@@ -59,6 +72,7 @@ const MwsTableExtension = Node.create({
             title: node.getAttribute('data-title') || '',
             viewId: node.getAttribute('data-view-id') || '',
             viewName: node.getAttribute('data-view-name') || '',
+            viewType: node.getAttribute('data-view-type') || '',
           };
         },
       },
@@ -73,11 +87,53 @@ const MwsTableExtension = Node.create({
         'data-title': HTMLAttributes.title,
         'data-view-id': HTMLAttributes.viewId,
         'data-view-name': HTMLAttributes.viewName,
+        'data-view-type': HTMLAttributes.viewType,
       }),
     ];
   },
   addNodeView() {
     return ReactNodeViewRenderer(MwsTableNodeView);
+  },
+});
+
+const MwsPageExtension = Node.create({
+  name: 'mwsPage',
+  group: 'block',
+  atom: true,
+  draggable: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      nodeId: { default: '' },
+      title: { default: '' },
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: 'div[data-mws-page]',
+        getAttrs: (el) => {
+          const node = el as HTMLElement;
+          return {
+            nodeId: node.getAttribute('data-node-id') || '',
+            title: node.getAttribute('data-title') || '',
+          };
+        },
+      },
+    ];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return [
+      'div',
+      mergeAttributes(HTMLAttributes, {
+        'data-mws-page': '',
+        'data-node-id': HTMLAttributes.nodeId,
+        'data-title': HTMLAttributes.title,
+      }),
+    ];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(MwsPageNodeView);
   },
 });
 
@@ -419,6 +475,7 @@ export default function Editor({
         allowBase64: false,
       }),
       MwsTableExtension,
+      MwsPageExtension,
       WikiLink.configure({
         onNavigate: handleWikiNavigate,
         HTMLAttributes: {},

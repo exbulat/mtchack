@@ -201,11 +201,19 @@ export const api = {
 
   listTables: () => request<MwsNodesResponse>('/tables'),
 
+  listMwsNodes: () => request<MwsNodesResponse>('/tables?includeAll=1'),
+
   getSpaces: () => request<Record<string, unknown>>('/tables/spaces'),
 
   getSpaceNodes: (spaceId: string) => request<Record<string, unknown>>(`/tables/spaces/${spaceId}/nodes`),
 
   getNode: (nodeId: string) => request<Record<string, unknown>>(`/tables/nodes/${nodeId}`),
+
+  updateNode: (nodeId: string, data: { name?: string; title?: string; description?: string; content?: string }) =>
+    request<Record<string, unknown>>(`/tables/nodes/${nodeId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
 
   getRecords: (dstId: string, pageSize = 100, viewId?: string | null) =>
     request<MwsRecordsResponse>(

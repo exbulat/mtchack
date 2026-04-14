@@ -43,6 +43,26 @@ interface PageViewOption {
   working: boolean;
 }
 
+type MwsTableNode = {
+  id?: string;
+  nodeId?: string;
+  dstId?: string;
+  name?: string;
+  title?: string;
+  type?: string;
+  nodeType?: string;
+};
+
+type MwsTableView = {
+  id?: string;
+  viewId?: string;
+  name?: string;
+  viewName?: string;
+  title?: string;
+  type?: string;
+  viewType?: string;
+};
+
 const PAGE_VIEW_OPTIONS: PageViewOption[] = [
   { id: 'page', label: 'Страница', icon: 'Pg', working: true },
   { id: 'architecture', label: 'Архитектура', icon: 'Ar', working: true },
@@ -144,6 +164,11 @@ function describeTablePickerError(error: unknown): string {
   return message;
 }
 
+function isDatasheetNode(node: MwsTableNode): boolean {
+  const value = node.id || node.nodeId || node.dstId || '';
+  return /^dst[a-zA-Z0-9]{10,}$/.test(value);
+}
+
 export default function PageEditor() {
   const { id, spaceId } = useParams<{ id?: string; spaceId?: string }>();
   const location = useLocation();
@@ -163,9 +188,14 @@ export default function PageEditor() {
   const [content, setContent] = useState<JSONContent>(EMPTY_DOC);
   const [loading, setLoading] = useState(true);
   const [showTableModal, setShowTableModal] = useState(false);
-  const [spaceNodes, setSpaceNodes] = useState<Array<{ id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }>>([]);
+  const [spaceNodes, setSpaceNodes] = useState<MwsTableNode[]>([]);
+  const [selectedTableNode, setSelectedTableNode] = useState<MwsTableNode | null>(null);
+  const [tableViews, setTableViews] = useState<MwsTableView[]>([]);
+  const [tableViewsLoading, setTableViewsLoading] = useState(false);
+  const [tableViewsError, setTableViewsError] = useState<string | null>(null);
   const [tableModalLoading, setTableModalLoading] = useState(false);
   const [tableModalError, setTableModalError] = useState<string | null>(null);
+  const [tableModalNotice, setTableModalNotice] = useState<string | null>(null);
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -208,6 +238,24 @@ export default function PageEditor() {
   const [selectedViewRecordId, setSelectedViewRecordId] = useState<string | null>(null);
 
   const [collab, setCollab] = useState<EditorCollab | null>(null);
+
+  const insertEditorBlock = useCallback((node: JSONContent) => {
+    if (!editorInstance) return false;
+    const editor = editorInstance;
+    const { from, to } = editor.state.selection;
+    const insertPos = from === to ? to : to;
+
+    editor
+      .chain()
+      .focus()
+      .insertContentAt(insertPos, [
+        node,
+        { type: 'paragraph' },
+      ])
+      .run();
+
+    return true;
+  }, [editorInstance]);
 
   const collabUserInfo = useMemo(
     () => (user ? { name: user.name, color: user.avatarColor } : undefined),
@@ -574,11 +622,15 @@ export default function PageEditor() {
     setShowTableModal(true);
     setTableModalLoading(true);
     setTableModalError(null);
+    setTableModalNotice(null);
+    setSelectedTableNode(null);
+    setTableViews([]);
+    setTableViewsError(null);
     setSpaceNodes([]);
     try {
       await ensurePageForBlocks();
-      const nodesData = await api.listTables();
-      const nodes = (nodesData?.data?.nodes || nodesData?.nodes || []) as Array<{ id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }>;
+      const nodesData = await api.listMwsNodes();
+      const nodes = (nodesData?.data?.nodes || nodesData?.nodes || []) as MwsTableNode[];
       setSpaceNodes(nodes);
       if (nodes.length === 0) {
         setTableModalError('В подключённом пространстве MWS пока нет таблиц. Создайте таблицу в MWS Tables и попробуйте снова.');
@@ -590,22 +642,63 @@ export default function PageEditor() {
     }
   };
 
-  const selectTable = (node: { id?: string; nodeId?: string; dstId?: string; name?: string; title?: string }) => {
+  const loadTableViews = useCallback(async (node: MwsTableNode) => {
+    const dstId = node.id || node.nodeId || node.dstId;
+    if (!dstId) return;
+    if (!isDatasheetNode(node)) {
+      setSelectedTableNode(null);
+      setTableViews([]);
+      setTableViewsError(null);
+      insertEditorBlock({
+        type: 'mwsPage',
+        attrs: {
+          nodeId: dstId,
+          title: node.name || node.title || dstId,
+        },
+      });
+      setShowTableModal(false);
+      setTableModalError(null);
+      setTableModalNotice(null);
+      return;
+    }
+    setSelectedTableNode(node);
+    setTableViews([]);
+    setTableViewsError(null);
+    setTableViewsLoading(true);
+    try {
+      const viewsData = await api.getViews(dstId);
+      const views = (viewsData?.data?.views || viewsData?.views || []) as MwsTableView[];
+      setTableViews(views);
+    } catch (error) {
+      setTableViewsError(error instanceof Error ? error.message : 'Не удалось загрузить представления таблицы');
+    } finally {
+      setTableViewsLoading(false);
+    }
+  }, [insertEditorBlock]);
+
+  const selectTable = (node: MwsTableNode, view?: MwsTableView | null) => {
     const dstId = node.id || node.nodeId || node.dstId;
     const name = node.name || node.title || dstId;
+    const resolvedViewId = view?.id || view?.viewId || '';
+    const resolvedViewName = view?.name || view?.viewName || view?.title || '';
+    const resolvedViewType = view?.type || view?.viewType || '';
     if (!dstId) return;
-    if (editorInstance) {
-      editorInstance
-        .chain()
-        .focus()
-        .insertContent({
-          type: 'mwsTable',
-          attrs: { dstId, title: name || '' },
-        })
-        .run();
-    }
-    setShowTableModal(false);
+    insertEditorBlock({
+      type: 'mwsTable',
+      attrs: {
+        dstId,
+        title: name || '',
+        ...(resolvedViewId ? { viewId: resolvedViewId } : {}),
+        ...(resolvedViewName ? { viewName: resolvedViewName } : {}),
+        ...(resolvedViewType ? { viewType: resolvedViewType } : {}),
+      },
+    });
     setTableModalError(null);
+    setTableModalNotice(
+      resolvedViewName
+        ? `Добавлено представление "${resolvedViewName}". Можно вставить еще одно.`
+        : 'Таблица добавлена. Можно вставить еще одно представление.'
+    );
   };
 
   const insertAiBlock = () => {
@@ -1176,12 +1269,25 @@ export default function PageEditor() {
         <div className="modal-overlay" onClick={() => {
           setShowTableModal(false);
           setTableModalError(null);
+          setSelectedTableNode(null);
+          setTableViews([]);
+          setTableViewsError(null);
         }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Выберите таблицу MWS</h3>
             <p className="modal-note">
               Таблица будет встроена прямо в страницу и продолжит синхронизироваться с MWS Tables.
             </p>
+            {tableModalNotice && (
+              <div className="modal-note" style={{ marginBottom: 10, color: 'var(--success, #15803d)' }}>
+                {tableModalNotice}
+              </div>
+            )}
+            {selectedTableNode && (
+              <div className="modal-note" style={{ marginBottom: 10 }}>
+                Выбрана таблица: <strong>{selectedTableNode.name || selectedTableNode.title || selectedTableNode.id || selectedTableNode.nodeId}</strong>
+              </div>
+            )}
             <ul className="modal-list">
               {tableModalLoading && <li className="modal-list-item modal-list-item--muted">Загружаем таблицы...</li>}
               {tableModalError && <li className="modal-list-item modal-list-item--muted">{tableModalError}</li>}
@@ -1189,21 +1295,51 @@ export default function PageEditor() {
                 <li
                   key={node.id || node.nodeId}
                   className="modal-list-item"
-                  onClick={() => selectTable(node)}
+                  onClick={() => void loadTableViews(node)}
                 >
                   <span>{node.name || node.title || node.id}</span>
+                  <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-muted)' }}>
+                    {isDatasheetNode(node) ? 'таблица' : 'страница'}
+                  </span>
                 </li>
               ))}
               {!tableModalLoading && !tableModalError && spaceNodes.length === 0 && (
                 <li className="modal-list-item">Нет доступных таблиц</li>
               )}
             </ul>
+            {selectedTableNode && (
+              <>
+                <h4 style={{ margin: '16px 0 8px' }}>Представление таблицы</h4>
+                <ul className="modal-list">
+                  {tableViewsLoading && <li className="modal-list-item modal-list-item--muted">Загружаем представления...</li>}
+                  {tableViewsError && <li className="modal-list-item modal-list-item--muted">{tableViewsError}</li>}
+                  {!tableViewsLoading && !tableViewsError && tableViews.map((view) => (
+                    <li
+                      key={view.id || view.viewId || view.name || view.title}
+                      className="modal-list-item"
+                      onClick={() => selectTable(selectedTableNode, view)}
+                    >
+                      <span>{view.name || view.viewName || view.title || view.id || view.viewId}</span>
+                    </li>
+                  ))}
+                  {!tableViewsLoading && !tableViewsError && tableViews.length === 0 && (
+                    <li className="modal-list-item" onClick={() => selectTable(selectedTableNode, null)}>
+                      <span>Таблица</span>
+                    </li>
+                  )}
+                </ul>
+              </>
+            )}
             <button className="modal-close" onClick={() => void openTablePicker()} disabled={tableModalLoading}>
               Обновить список
             </button>
             <button className="modal-close" onClick={() => {
               setShowTableModal(false);
               setTableModalError(null);
+              setTableModalNotice(null);
+              setSelectedTableNode(null);
+              setTableViews([]);
+              setTableViewsError(null);
             }}>
               Закрыть
             </button>
@@ -1574,3 +1710,4 @@ function parseDateFields(text: string): { date?: string; startDate?: string; end
   }
   return {};
 }
+

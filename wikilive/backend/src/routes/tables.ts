@@ -57,6 +57,22 @@ function validateCreateDatasheetBody(body: unknown): Record<string, unknown> | n
   return obj;
 }
 
+function validateNodeUpdateBody(body: unknown): Record<string, unknown> | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const obj = body as Record<string, unknown>;
+  try {
+    const serialized = JSON.stringify(obj);
+    if (serialized.length > MAX_BODY_SIZE) return null;
+  } catch {
+    return null;
+  }
+  const allowedKeys = new Set(['name', 'title', 'description', 'content']);
+  for (const key of Object.keys(obj)) {
+    if (!allowedKeys.has(key)) return null;
+  }
+  return obj;
+}
+
 function validateDstId(dstId: unknown): string | null {
   if (typeof dstId !== 'string') return null;
   if (!/^dst[a-zA-Z0-9]{10,}$/.test(dstId)) return null;
@@ -92,7 +108,7 @@ function validateNumericParam(param: unknown, max: number = 1000): number | null
   return null;
 }
 
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     let spaceId = process.env.MWS_TABLES_SPACE_ID;
 
@@ -120,8 +136,10 @@ router.get('/', async (_req: Request, res: Response) => {
       spaceId = validSpaceId;
     }
 
+    const includeAll = req.query.includeAll === '1' || req.query.includeAll === 'true';
+    const qs = includeAll ? '' : '?type=Datasheet';
     const resp = await fetch(
-      `${BASE_URL()}/fusion/v1/spaces/${encodeURIComponent(spaceId)}/nodes?type=Datasheet`,
+      `${BASE_URL()}/fusion/v1/spaces/${encodeURIComponent(spaceId)}/nodes${qs}`,
       { headers: getMwsHeaders() }
     );
     const data = await resp.json();
@@ -250,6 +268,32 @@ router.get('/nodes/:nodeId', async (req: Request, res: Response) => {
     res.status(resp.status).json(data);
   } catch {
     res.status(502).json({ error: 'Failed to fetch node details' });
+  }
+});
+
+router.patch('/nodes/:nodeId', async (req: Request, res: Response) => {
+  try {
+    const nodeId = validateNodeId(req.params.nodeId);
+    if (!nodeId) {
+      return res.status(400).json({ error: 'Invalid node ID format' });
+    }
+    const validatedBody = validateNodeUpdateBody(req.body);
+    if (!validatedBody) {
+      return res.status(400).json({ error: 'Invalid node update body' });
+    }
+
+    const resp = await fetch(
+      `${BASE_URL()}/fusion/v1/nodes/${encodeURIComponent(nodeId)}`,
+      {
+        method: 'PATCH',
+        headers: getMwsHeaders(),
+        body: JSON.stringify(validatedBody),
+      }
+    );
+    const data = await resp.json();
+    res.status(resp.status).json(data);
+  } catch {
+    res.status(502).json({ error: 'Failed to update node' });
   }
 });
 
