@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { api } from '../lib/api';
 
 interface MwsField {
@@ -27,8 +27,27 @@ interface TableEmbedProps {
 
 type ViewMode = 'table' | 'calendar' | 'gallery' | 'kanban' | 'architecture' | 'gantt' | 'grid' | 'form';
 
+type KanbanOptionMeta = {
+  value: string;
+  color?: string;
+  textColor?: string;
+  borderColor?: string;
+};
+
+type KanbanHistoryEntry = {
+  id: string;
+  recordId: string;
+  action: 'created' | 'updated' | 'moved';
+  fieldId?: string;
+  fieldName?: string;
+  oldValue?: string;
+  newValue?: string;
+  createdAt: number;
+};
+
 const PAGE_SIZE = 50;
 const LIVE_POLL_INTERVAL_MS = 20_000;
+const KANBAN_HISTORY_KEY_PREFIX = 'wikilive-mws-kanban-history:';
 const EDITABLE_FIELD_TYPE_HINTS = new Set([
   'text',
   'singletext',
@@ -185,6 +204,130 @@ function extractFieldOptions(field: MwsField | undefined): string[] {
   return Array.from(values);
 }
 
+function sanitizeColor(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (
+    value.startsWith('#') ||
+    value.startsWith('rgb(') ||
+    value.startsWith('rgba(') ||
+    value.startsWith('hsl(') ||
+    value.startsWith('hsla(') ||
+    value.startsWith('var(')
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function pickColor(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const direct = sanitizeColor(record[key]);
+    if (direct) return direct;
+    const nested = record[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const nestedRecord = nested as Record<string, unknown>;
+      const nestedColor =
+        sanitizeColor(nestedRecord.color) ||
+        sanitizeColor(nestedRecord.backgroundColor) ||
+        sanitizeColor(nestedRecord.borderColor) ||
+        sanitizeColor(nestedRecord.textColor);
+      if (nestedColor) return nestedColor;
+    }
+  }
+  return undefined;
+}
+
+function extractKanbanOptionMeta(field: MwsField | undefined): KanbanOptionMeta[] {
+  if (!field) return [];
+
+  const property = field.property as Record<string, unknown> | undefined;
+  const candidates = [field.options, property?.options, property?.selectOptions];
+  const metas = new Map<string, KanbanOptionMeta>();
+
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+
+    for (const option of candidate) {
+      if (typeof option === 'string') {
+        const value = option.trim();
+        if (value) metas.set(value, { value });
+        continue;
+      }
+      if (!option || typeof option !== 'object' || Array.isArray(option)) continue;
+
+      const record = option as Record<string, unknown>;
+      const value =
+        typeof record.name === 'string' ? record.name :
+        typeof record.label === 'string' ? record.label :
+        typeof record.title === 'string' ? record.title :
+        typeof record.value === 'string' ? record.value :
+        typeof record.text === 'string' ? record.text :
+        '';
+      const normalizedValue = value.trim();
+      if (!normalizedValue) continue;
+
+      metas.set(normalizedValue, {
+        value: normalizedValue,
+        color: pickColor(record, ['color', 'bgColor', 'backgroundColor', 'fillColor']),
+        textColor: pickColor(record, ['textColor', 'fontColor', 'foregroundColor']),
+        borderColor: pickColor(record, ['borderColor', 'strokeColor']),
+      });
+    }
+  }
+
+  return Array.from(metas.values());
+}
+
+function formatHistoryTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getKanbanHistoryStorageKey(dstId: string, viewId?: string): string {
+  return `${KANBAN_HISTORY_KEY_PREFIX}${dstId}:${viewId || 'default'}`;
+}
+
+function readKanbanHistory(storageKey: string): KanbanHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as KanbanHistoryEntry[] : [];
+  } catch {
+    localStorage.removeItem(storageKey);
+    return [];
+  }
+}
+
+function extractCreatedRecordId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const root = payload as Record<string, unknown>;
+  const buckets = [root, root.data as Record<string, unknown> | undefined];
+
+  for (const bucket of buckets) {
+    if (!bucket) continue;
+    const records = bucket.records;
+    if (!Array.isArray(records) || records.length === 0) continue;
+    const first = records[0];
+    if (!first || typeof first !== 'object' || Array.isArray(first)) continue;
+    const record = first as Record<string, unknown>;
+    const recordId = record.recordId || record.id;
+    if (typeof recordId === 'string' && recordId.trim()) return recordId;
+  }
+
+  return null;
+}
+
+function getTaskFieldLabel(field: { id: string; name: string }, statusFieldId: string): string {
+  return field.id === statusFieldId ? 'Статус' : field.name;
+}
+
 function getFieldValueStats(fieldId: string, records: MwsRecord[]): { uniqueCount: number; nonEmptyCount: number } {
   const values = records
     .map((record) => mwsCellDisplayValue((record.fields || {})[fieldId]).trim())
@@ -328,9 +471,28 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
   const [draggedKanbanRecordId, setDraggedKanbanRecordId] = useState<string | null>(null);
   const [addingKanbanColumn, setAddingKanbanColumn] = useState<string | null>(null);
+  const [activeKanbanRecordId, setActiveKanbanRecordId] = useState<string | null>(null);
+  const [kanbanHistory, setKanbanHistory] = useState<KanbanHistoryEntry[]>([]);
+  const [kanbanTaskDraft, setKanbanTaskDraft] = useState<Record<string, string>>({});
+  const [savingTaskModal, setSavingTaskModal] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthKey());
   const viewMode = useMemo(() => normalizeViewMode(viewType, viewName), [viewType, viewName]);
+  const kanbanHistoryStorageKey = useMemo(
+    () => getKanbanHistoryStorageKey(dstId, viewId),
+    [dstId, viewId]
+  );
+
+  const appendKanbanHistory = useCallback((entry: Omit<KanbanHistoryEntry, 'id' | 'createdAt'>) => {
+    setKanbanHistory((prev) => [
+      {
+        ...entry,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: Date.now(),
+      },
+      ...prev,
+    ].slice(0, 200));
+  }, []);
 
   const load = useCallback(
     async (currentPage = page) => {
@@ -357,6 +519,18 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     },
     [dstId, page, viewId]
   );
+
+  useEffect(() => {
+    setKanbanHistory(readKanbanHistory(kanbanHistoryStorageKey));
+  }, [kanbanHistoryStorageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(kanbanHistoryStorageKey, JSON.stringify(kanbanHistory));
+    } catch {
+      // ignore storage failures
+    }
+  }, [kanbanHistory, kanbanHistoryStorageKey]);
 
   useEffect(() => {
     setPage(1);
@@ -405,6 +579,34 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     [fields, records]
   );
 
+  const activeKanbanRecord = useMemo(
+    () => records.find((record) => (record.recordId || record.id || '') === activeKanbanRecordId) || null,
+    [activeKanbanRecordId, records]
+  );
+
+  useEffect(() => {
+    if (!activeKanbanRecordId) return;
+    if (activeKanbanRecord) return;
+    setActiveKanbanRecordId(null);
+  }, [activeKanbanRecord, activeKanbanRecordId]);
+
+  useEffect(() => {
+    if (!activeKanbanRecord) {
+      setKanbanTaskDraft({});
+      return;
+    }
+
+    const nextDraft = Object.fromEntries(
+      normalizedFields.map((field) => [
+        field.id,
+        (field.typeHint || '').includes('date')
+          ? parseDateValue((activeKanbanRecord.fields || {})[field.id]) || ''
+          : formatFieldDisplayValue(field, (activeKanbanRecord.fields || {})[field.id]),
+      ])
+    );
+    setKanbanTaskDraft(nextDraft);
+  }, [activeKanbanRecord, normalizedFields]);
+
   const filteredRecords = useMemo(() => {
     let result = records.slice(0, PAGE_SIZE * page);
     if (filterText.trim()) {
@@ -423,9 +625,18 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     return result;
   }, [records, page, filterText, sortField, sortAsc]);
 
-  const updateCell = async (recordId: string, fieldId: string, value: string, force = false) => {
+  const updateCell = async (
+    recordId: string,
+    fieldId: string,
+    value: string,
+    force = false,
+    historyAction: KanbanHistoryEntry['action'] = 'updated'
+  ) => {
     const targetField = normalizedFields.find((field) => field.id === fieldId);
     if (!targetField || (!targetField.editable && !force)) return;
+    const previousRecord = records.find((record) => (record.recordId || record.id) === recordId);
+    const oldValue = mwsCellDisplayValue((previousRecord?.fields || {})[fieldId]);
+    if (oldValue === value) return;
 
     const cellKey = `${recordId}:${fieldId}`;
     setSavingCells((prev) => new Set(prev).add(cellKey));
@@ -441,6 +652,14 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         )
       );
       setLastLoadedAt(Date.now());
+      appendKanbanHistory({
+        action: historyAction,
+        recordId,
+        fieldId,
+        fieldName: getTaskFieldLabel(targetField, statusFieldId),
+        oldValue,
+        newValue: value,
+      });
     } catch {
       load(page);
     } finally {
@@ -482,10 +701,20 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
     setAddingRow(true);
     try {
-      await api.createRecords(dstId, {
+      const response = await api.createRecords(dstId, {
         records: [{ fields: nextRecordFields }],
       });
       await load(page);
+      const createdRecordId = extractCreatedRecordId(response);
+      if (createdRecordId) {
+        appendKanbanHistory({
+          action: 'created',
+          recordId: createdRecordId,
+          fieldId: primaryFieldId,
+          fieldName: normalizedFields.find((field) => field.id === primaryFieldId)?.name || 'Название',
+          newValue: typeof nextRecordFields[primaryFieldId] === 'string' ? nextRecordFields[primaryFieldId] : 'Новая запись',
+        });
+      }
       setNewRowValues({});
       setShowNewRow(false);
     } catch {
@@ -511,10 +740,21 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
     setAddingKanbanColumn(column);
     try {
-      await api.createRecords(dstId, {
+      const response = await api.createRecords(dstId, {
         records: [{ fields: nextRecordFields }],
       });
       await load(page);
+      const createdRecordId = extractCreatedRecordId(response);
+      if (createdRecordId) {
+        appendKanbanHistory({
+          action: 'created',
+          recordId: createdRecordId,
+          fieldId: primaryFieldId,
+          fieldName: normalizedFields.find((field) => field.id === primaryFieldId)?.name || 'Название',
+          newValue: nextRecordFields[titleFieldId || primaryFieldId] || 'Новая запись',
+        });
+        setActiveKanbanRecordId(createdRecordId);
+      }
     } catch {
       // ignore
     } finally {
@@ -629,6 +869,14 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     () => normalizedFields.find((field) => field.id === statusFieldId)?.raw as MwsField | undefined,
     [normalizedFields, statusFieldId]
   );
+  const kanbanOptionMeta = useMemo(
+    () => extractKanbanOptionMeta(statusField),
+    [statusField]
+  );
+  const kanbanOptionMetaByValue = useMemo(
+    () => new Map(kanbanOptionMeta.map((item) => [item.value, item])),
+    [kanbanOptionMeta]
+  );
   const kanbanColumns = useMemo(() => {
     if (!statusFieldId) return ['No status'];
 
@@ -642,6 +890,43 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
     return Array.from(values);
   }, [records, statusField, statusFieldId]);
+  const activeKanbanHistory = useMemo(
+    () => kanbanHistory.filter((entry) => entry.recordId === activeKanbanRecordId),
+    [activeKanbanRecordId, kanbanHistory]
+  );
+  const fieldOptionSuggestions = useMemo(() => {
+    const map = new Map<string, string[]>();
+
+    for (const field of normalizedFields) {
+      const values = new Set<string>(extractFieldOptions(field.raw));
+
+      for (const record of records) {
+        const value = mwsCellDisplayValue((record.fields || {})[field.id]).trim();
+        if (value) values.add(value);
+      }
+
+      if (field.id === statusFieldId) {
+        for (const column of kanbanColumns) {
+          if (column !== 'No status') values.add(column);
+        }
+      }
+
+      map.set(field.id, Array.from(values));
+    }
+
+    return map;
+  }, [kanbanColumns, normalizedFields, records, statusFieldId]);
+
+  function getKanbanOptionStyle(status: string): CSSProperties | undefined {
+    const meta = kanbanOptionMetaByValue.get(status);
+    if (!meta) return undefined;
+
+    return {
+      background: meta.color ? `color-mix(in srgb, ${meta.color} 18%, white 82%)` : undefined,
+      color: meta.textColor || meta.color || undefined,
+      borderColor: meta.borderColor || meta.color || undefined,
+    };
+  }
 
   const calendarEntries = useMemo(
     () =>
@@ -788,6 +1073,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         <div className="page-kanban table-embed-kanban-board">
           {Array.from(grouped.entries()).map(([group, items]) => {
             const toneClass = getKanbanToneClass(group);
+            const optionStyle = getKanbanOptionStyle(group);
             return (
               <section
                 key={group}
@@ -798,13 +1084,17 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                 }}
                 onDrop={() => {
                   if (!draggedKanbanRecordId) return;
-                void updateCell(draggedKanbanRecordId, statusFieldId, group === 'No status' ? '' : group, true);
+                void updateCell(draggedKanbanRecordId, statusFieldId, group === 'No status' ? '' : group, true, 'moved');
                 setDraggedKanbanRecordId(null);
               }}
+                style={optionStyle?.borderColor ? { borderTop: `3px solid ${optionStyle.borderColor}` } : undefined}
             >
               <header className={`page-kanban-col-header is-${toneClass} table-embed-kanban-col-header`}>
                 <div className="page-kanban-col-title-wrap table-embed-kanban-col-title-wrap">
-                  <span className={`page-kanban-col-dot is-${toneClass} table-embed-kanban-col-dot is-${toneClass}`} />
+                  <span
+                    className={`page-kanban-col-dot is-${toneClass} table-embed-kanban-col-dot is-${toneClass}`}
+                    style={{ background: optionStyle?.borderColor || optionStyle?.color }}
+                  />
                   <span className="table-embed-kanban-col-title">{group}</span>
                 </div>
                 <span className="page-kanban-col-count table-embed-kanban-col-count">{items.length}</span>
@@ -826,10 +1116,16 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                         draggable
                         onDragStart={() => setDraggedKanbanRecordId(recordId)}
                         onDragEnd={() => setDraggedKanbanRecordId(null)}
+                        onClick={() => setActiveKanbanRecordId(recordId)}
                       >
                         <div className="table-embed-kanban-card-type">{cardLabel}</div>
                         <h4>{titleValue}</h4>
-                        <span className={`page-kanban-card-status table-embed-kanban-card-status is-${toneClass}`}>{group}</span>
+                        <span
+                          className={`page-kanban-card-status table-embed-kanban-card-status is-${toneClass}`}
+                          style={optionStyle}
+                        >
+                          {group}
+                        </span>
                       </article>
                     );
                   }) : <div className="page-kanban-empty table-embed-kanban-empty">Пусто</div>}
@@ -851,6 +1147,173 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
               <span>Новая группа</span>
             </button>
           </section>
+        </div>
+      </div>
+    );
+  };
+
+  const renderKanbanTaskModal = () => {
+    if (!activeKanbanRecord || !activeKanbanRecordId) return null;
+
+    const recordFields = activeKanbanRecord.fields || {};
+    const titleValue = mwsCellDisplayValue(recordFields[primaryFieldId]) || `Record ${activeKanbanRecordId}`;
+    const canDeleteTask = !deletingRows.has(activeKanbanRecordId);
+    const currentStatus = kanbanTaskDraft[statusFieldId] || mwsCellDisplayValue(recordFields[statusFieldId]).trim() || 'No status';
+    const currentStatusStyle = getKanbanOptionStyle(currentStatus);
+
+    const saveKanbanTask = async () => {
+      if (savingTaskModal) return;
+      setSavingTaskModal(true);
+      try {
+        for (const field of normalizedFields) {
+          const isStatusField = field.id === statusFieldId;
+          if (!field.editable && !isStatusField) continue;
+
+          const nextValue = (kanbanTaskDraft[field.id] || '').trim();
+          const currentValue = ((field.typeHint || '').includes('date')
+            ? parseDateValue(recordFields[field.id]) || ''
+            : formatFieldDisplayValue(field, recordFields[field.id])).trim();
+
+          if (nextValue === currentValue) continue;
+          await updateCell(
+            activeKanbanRecordId,
+            field.id,
+            nextValue,
+            isStatusField,
+            isStatusField ? 'moved' : 'updated'
+          );
+        }
+      } finally {
+        setSavingTaskModal(false);
+      }
+    };
+
+    const removeKanbanTask = async () => {
+      if (!canDeleteTask) return;
+      await deleteRow(activeKanbanRecordId);
+      setActiveKanbanRecordId(null);
+    };
+
+    return (
+      <div className="modal-overlay" onClick={() => setActiveKanbanRecordId(null)}>
+        <div className="modal table-embed-task-modal" onClick={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className="table-embed-task-modal-close"
+            onClick={() => setActiveKanbanRecordId(null)}
+            aria-label="Закрыть"
+          >
+            x
+          </button>
+          <div className="table-embed-task-modal-shell">
+            <div className="table-embed-task-modal-main">
+              <div className="table-embed-task-modal-header">
+                <div className="table-embed-task-title-wrap">
+                  <h3>{titleValue}</h3>
+                  <span className="table-embed-task-status-pill" style={currentStatusStyle}>
+                    {currentStatus === 'No status' ? 'Без статуса' : currentStatus}
+                  </span>
+                </div>
+              </div>
+            <div className="table-embed-task-modal-fields">
+              {normalizedFields.map((field) => {
+                const displayValue = kanbanTaskDraft[field.id] ?? '';
+                const isStatusField = field.id === statusFieldId;
+                const fieldOptions = fieldOptionSuggestions.get(field.id) || [];
+                const hasSelectableOptions = fieldOptions.length > 0;
+                const dataListId = `task-field-options-${activeKanbanRecordId}-${field.id}`;
+
+                return (
+                  <label key={`${activeKanbanRecordId}:${field.id}`} className="table-embed-task-field">
+                    <span>{getTaskFieldLabel(field, statusFieldId)}</span>
+                    {field.editable || isStatusField ? (
+                      hasSelectableOptions || isStatusField ? (
+                        <>
+                          <input
+                            className="table-embed-task-input"
+                            list={dataListId}
+                            value={displayValue}
+                            placeholder={hasSelectableOptions ? 'Выберите или введите новое значение' : 'Введите значение'}
+                            onChange={(event) => {
+                              setKanbanTaskDraft((prev) => ({ ...prev, [field.id]: event.target.value }));
+                            }}
+                          />
+                          <datalist id={dataListId}>
+                            {fieldOptions.map((option) => (
+                              <option key={option} value={option} />
+                            ))}
+                          </datalist>
+                        </>
+                      ) : (
+                        <input
+                          className="table-embed-task-input"
+                          type={(field.typeHint || '').includes('date') ? 'date' : 'text'}
+                          value={displayValue}
+                          onChange={(event) => {
+                            setKanbanTaskDraft((prev) => ({ ...prev, [field.id]: event.target.value }));
+                          }}
+                        />
+                      )
+                    ) : (
+                      <div className="table-embed-task-readonly">{displayValue || '—'}</div>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="table-embed-task-actions">
+              <button
+                type="button"
+                className="table-embed-task-save"
+                onClick={() => void saveKanbanTask()}
+                disabled={savingTaskModal}
+              >
+                {savingTaskModal ? 'Сохранение...' : 'Сохранить'}
+              </button>
+              <button
+                type="button"
+                className="table-embed-task-delete"
+                onClick={() => void removeKanbanTask()}
+                disabled={!canDeleteTask}
+              >
+                {canDeleteTask ? 'Удалить задачу' : 'Удаление...'}
+              </button>
+            </div>
+          </div>
+          <aside className="table-embed-task-history">
+            <div className="table-embed-task-history-head">
+              <strong>История</strong>
+            </div>
+            {activeKanbanHistory.length > 0 ? (
+              <div className="table-embed-task-history-list">
+                {activeKanbanHistory.map((entry) => (
+                  <div key={entry.id} className="table-embed-task-history-item">
+                    <div className="table-embed-task-history-title">
+                      {entry.action === 'created' && 'Добавлена запись'}
+                      {entry.action === 'moved' && 'Перемещена задача'}
+                      {entry.action === 'updated' && 'Изменено поле'}
+                    </div>
+                    <div className="table-embed-task-history-time">{formatHistoryTime(entry.createdAt)}</div>
+                    {entry.fieldName && <div className="table-embed-task-history-field">{entry.fieldId === statusFieldId ? 'Статус' : entry.fieldName}</div>}
+                    {entry.newValue && entry.action === 'created' ? (
+                      <div className="table-embed-task-history-values">
+                        <span>{entry.newValue}</span>
+                      </div>
+                    ) : (
+                      <div className="table-embed-task-history-values">
+                        <span>{entry.oldValue || '—'}</span>
+                        <span>→</span>
+                        <span>{entry.newValue || '—'}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="table-embed-task-history-empty">Изменений пока нет.</div>
+            )}
+          </aside>
+          </div>
         </div>
       </div>
     );
@@ -1189,6 +1652,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
       {viewMode === 'architecture' && renderArchitectureView()}
       {viewMode === 'gantt' && renderGanttView()}
       {viewMode === 'form' && renderFormView()}
+      {viewMode === 'kanban' && renderKanbanTaskModal()}
 
       {viewMode !== 'kanban' && <div className="table-embed-footer">
         <span className="table-embed-count">
