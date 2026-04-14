@@ -120,6 +120,14 @@ export default function PageViews({
     title: '',
     date: toDateString(getMonthKey(), 1),
   }));
+  const [showGanttCreateModal, setShowGanttCreateModal] = useState(false);
+  const [ganttDraft, setGanttDraft] = useState(() => ({
+    title: '',
+    startDate: toDateString(getMonthKey(), 1),
+    endDate: toDateString(getMonthKey(), Math.min(3, getDaysInMonth(getMonthKey()))),
+    status: 'To Do' as KanbanStatus,
+    notes: '',
+  }));
   const [ganttDrag, setGanttDrag] = useState<null | {
     id: string;
     mode: 'move' | 'start' | 'end';
@@ -223,6 +231,40 @@ export default function PageViews({
     });
     onSelectRecord(recordId);
     setCalendarDraft((prev) => ({ ...prev, title: '' }));
+  }
+
+  function openGanttCreateModal(): void {
+    const monthDays = getDaysInMonth(ganttMonth);
+    setGanttDraft({
+      title: '',
+      startDate: toDateString(ganttMonth, 1),
+      endDate: toDateString(ganttMonth, Math.min(3, monthDays)),
+      status: 'To Do',
+      notes: '',
+    });
+    setShowGanttCreateModal(true);
+  }
+
+  function submitGanttDraft(): void {
+    const title = ganttDraft.title.trim();
+    if (!title || !ganttDraft.startDate || !ganttDraft.endDate) return;
+
+    const startDate = ganttDraft.startDate <= ganttDraft.endDate ? ganttDraft.startDate : ganttDraft.endDate;
+    const endDate = ganttDraft.endDate >= ganttDraft.startDate ? ganttDraft.endDate : ganttDraft.startDate;
+    const notes = ganttDraft.notes.trim();
+
+    const recordId = onCreateRecord({
+      title,
+      typeLabel: 'Этап',
+      date: startDate,
+      startDate,
+      endDate,
+      status: ganttDraft.status,
+      notes,
+      excerpt: notes,
+    });
+    onSelectRecord(recordId);
+    setShowGanttCreateModal(false);
   }
 
   function renderArchitecture() {
@@ -509,13 +551,7 @@ export default function PageViews({
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => onSelectRecord(onCreateRecord({
-              title: 'Новый этап',
-              typeLabel: 'Этап',
-              date: toDateString(ganttMonth, 1),
-              startDate: toDateString(ganttMonth, 1),
-              endDate: toDateString(ganttMonth, 3),
-            }))}
+            onClick={openGanttCreateModal}
           >
             Новый этап
           </button>
@@ -533,12 +569,21 @@ export default function PageViews({
             const endDay = getDayNumber(end, ganttMonth);
             const left = ((startDay - 1) / ganttDays) * 100;
             const width = (Math.max(1, endDay - startDay + 1) / ganttDays) * 100;
+            const duration = Math.max(1, endDay - startDay + 1);
             return (
               <div key={item.id} className="page-gantt-row">
-                <button type="button" className="page-gantt-label" onClick={() => onSelectRecord(item.id)}>
+                <button
+                  type="button"
+                  className={`page-gantt-label${selectedRecordId === item.id ? ' is-selected' : ''}`}
+                  onClick={() => onSelectRecord(item.id)}
+                >
+                  <span className={`page-gantt-label-badge is-${statusClassName(item.status)}`}>{statusLabel(item.status)}</span>
                   <span className="page-gantt-label-title">{item.title}</span>
                   <span className="page-gantt-label-meta">
                     {formatShortDate(start)} - {formatShortDate(end)}
+                  </span>
+                  <span className="page-gantt-label-submeta">
+                    {duration} дн. {item.typeLabel ? `• ${item.typeLabel}` : ''}
                   </span>
                 </button>
                 <div className="page-gantt-track">
@@ -796,25 +841,94 @@ export default function PageViews({
   if (activeView === 'architecture') return renderArchitecture();
 
   return (
-    <div className="page-view-shell">
-      <div className="page-view-main">
-        {activeView === 'grid' && renderGrid()}
-        {activeView === 'gallery' && renderGallery()}
-        {activeView === 'kanban' && renderKanban()}
-        {activeView === 'calendar' && renderCalendar()}
-        {activeView === 'gantt' && renderGantt()}
-        {activeView === 'form' && renderForm()}
-        {!['grid', 'gallery', 'kanban', 'calendar', 'gantt', 'form'].includes(activeView) && (
-          <div className="page-grid-view">
-            <div className="page-grid-view-head">
-              <span className="page-grid-view-title">{activeViewLabel}</span>
-              <span className="page-grid-view-note">Представление</span>
+    <>
+      <div className="page-view-shell">
+        <div className="page-view-main">
+          {activeView === 'grid' && renderGrid()}
+          {activeView === 'gallery' && renderGallery()}
+          {activeView === 'kanban' && renderKanban()}
+          {activeView === 'calendar' && renderCalendar()}
+          {activeView === 'gantt' && renderGantt()}
+          {activeView === 'form' && renderForm()}
+          {!['grid', 'gallery', 'kanban', 'calendar', 'gantt', 'form'].includes(activeView) && (
+            <div className="page-grid-view">
+              <div className="page-grid-view-head">
+                <span className="page-grid-view-title">{activeViewLabel}</span>
+                <span className="page-grid-view-note">Представление</span>
+              </div>
+              <div className="page-grid-empty">Это представление пока недоступно</div>
             </div>
-            <div className="page-grid-empty">Это представление пока недоступно</div>
-          </div>
-        )}
+          )}
+        </div>
+        {renderRecordInspector()}
       </div>
-      {renderRecordInspector()}
-    </div>
+      {showGanttCreateModal && (
+        <div className="modal-overlay" onClick={() => setShowGanttCreateModal(false)}>
+          <div className="modal page-gantt-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>Новый этап</h3>
+            <p className="modal-note">Создание записи для диаграммы Ганта вынесено в отдельное окно.</p>
+            <div className="page-gantt-modal-fields">
+              <label className="page-view-field">
+                <span>Название</span>
+                <input
+                  className="page-form-input"
+                  placeholder="Например, дизайн этапа"
+                  value={ganttDraft.title}
+                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, title: event.target.value }))}
+                />
+              </label>
+              <label className="page-view-field">
+                <span>Статус</span>
+                <select
+                  className="page-form-input"
+                  value={ganttDraft.status}
+                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, status: event.target.value as KanbanStatus }))}
+                >
+                  <option value="To Do">К выполнению</option>
+                  <option value="In Progress">В работе</option>
+                  <option value="Done">Готово</option>
+                  <option value="Other">Другое</option>
+                </select>
+              </label>
+              <label className="page-view-field">
+                <span>Начало</span>
+                <input
+                  className="page-form-input"
+                  type="date"
+                  value={ganttDraft.startDate}
+                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, startDate: event.target.value }))}
+                />
+              </label>
+              <label className="page-view-field">
+                <span>Завершение</span>
+                <input
+                  className="page-form-input"
+                  type="date"
+                  value={ganttDraft.endDate}
+                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, endDate: event.target.value }))}
+                />
+              </label>
+              <label className="page-view-field page-gantt-modal-notes">
+                <span>Описание</span>
+                <textarea
+                  className="page-form-input page-form-textarea"
+                  placeholder="Коротко опишите этап"
+                  value={ganttDraft.notes}
+                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, notes: event.target.value }))}
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button className="modal-close" onClick={() => setShowGanttCreateModal(false)}>
+                Отмена
+              </button>
+              <button className="modal-close" onClick={submitGanttDraft} disabled={!ganttDraft.title.trim() || !ganttDraft.startDate || !ganttDraft.endDate}>
+                Создать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
