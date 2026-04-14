@@ -2007,7 +2007,7 @@ strong { color: var(--text); font-weight: 600; }
 
 .page-editor-container {
   position: relative;
-  max-width: 720px;
+  max-width: 85%;
   margin: 0 auto;
   padding: 44px 32px 100px;
   z-index: 1;
@@ -3395,6 +3395,262 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed-count {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.table-embed-kanban-view {
+  padding: 18px;
+}
+
+.table-embed-kanban-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.table-embed-kanban-title {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.table-embed-kanban-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.table-embed-kanban-toolbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.table-embed-kanban-primary {
+  min-height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: #101223;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.14s ease, opacity 0.14s ease;
+}
+
+.table-embed-kanban-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.table-embed-kanban-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.table-embed-kanban-board {
+  padding-bottom: 8px;
+}
+
+.table-embed-kanban-col {
+  min-width: 200px;
+}
+
+.table-embed-kanban-col-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-embed-kanban-col-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.table-embed-kanban-col-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.table-embed-kanban-col-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.table-embed-kanban-col-dot.is-todo,
+.table-embed-kanban-chip.is-todo,
+.table-embed-kanban-card-status.is-todo {
+  background: color-mix(in srgb, #d7c7ff 70%, transparent);
+  color: #5b3ea8;
+}
+
+.table-embed-kanban-col-dot.is-progress,
+.table-embed-kanban-chip.is-progress,
+.table-embed-kanban-card-status.is-progress {
+  background: color-mix(in srgb, #c8d7ff 74%, transparent);
+  color: #2f56b2;
+}
+
+.table-embed-kanban-col-dot.is-done,
+.table-embed-kanban-chip.is-done,
+.table-embed-kanban-card-status.is-done {
+  background: color-mix(in srgb, #c8f2e1 74%, transparent);
+  color: #0f7a5b;
+}
+
+.table-embed-kanban-col-dot.is-review,
+.table-embed-kanban-chip.is-review,
+.table-embed-kanban-card-status.is-review {
+  background: color-mix(in srgb, #ffe0a8 76%, transparent);
+  color: #a46211;
+}
+
+.table-embed-kanban-col-dot.is-waiting,
+.table-embed-kanban-chip.is-waiting,
+.table-embed-kanban-card-status.is-waiting {
+  background: color-mix(in srgb, #d7d9e6 76%, transparent);
+  color: #667085;
+}
+
+.table-embed-kanban-col-dot.is-blocked,
+.table-embed-kanban-chip.is-blocked,
+.table-embed-kanban-card-status.is-blocked {
+  background: color-mix(in srgb, #ffd0d0 76%, transparent);
+  color: #b42318;
+}
+
+.table-embed-kanban-col-dot.is-urgent,
+.table-embed-kanban-chip.is-urgent,
+.table-embed-kanban-card-status.is-urgent {
+  background: color-mix(in srgb, #ffd7b8 76%, transparent);
+  color: #c2410c;
+}
+
+.table-embed-kanban-col-dot.is-custom,
+.table-embed-kanban-chip.is-custom,
+.table-embed-kanban-card-status.is-custom {
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  color: var(--text-secondary);
+}
+
+.table-embed-kanban-chip,
+.table-embed-kanban-card-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  white-space: nowrap;
+}
+
+.table-embed-kanban-col-count {
+  min-width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg) 64%, var(--bg-secondary) 36%);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.table-embed-kanban-col-body {
+  display: grid;
+  gap: 10px;
+  min-height: 240px;
+  align-content: start;
+}
+
+.table-embed-kanban-card {
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+
+.table-embed-kanban-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--bg) 14%, transparent);
+}
+
+.table-embed-kanban-card.is-dragging {
+  opacity: 0.7;
+  transform: scale(0.985);
+}
+
+.table-embed-kanban-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.table-embed-kanban-card h4 {
+  margin-bottom: 10px;
+}
+
+.table-embed-kanban-card-type {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.table-embed-kanban-empty {
+  min-height: 32px;
+}
+
+.table-embed-kanban-add-card {
+  margin-top: auto;
+  min-height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+  display: grid;
+  place-items: center;
+}
+
+.table-embed-kanban-creator .page-kanban-add-col {
+  cursor: default;
+  opacity: 1;
+}
+
+.table-embed-kanban-creator .page-kanban-add-col:disabled {
+  opacity: 1;
+}
+
+.table-embed-kanban-add-card:hover:not(:disabled) {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.table-embed-kanban-add-card:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 /* Tiptap data table */

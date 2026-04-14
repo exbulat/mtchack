@@ -148,11 +148,87 @@ function normalizeViewMode(viewType?: string, viewName?: string): ViewMode {
   if (source.includes('calendar') || source.includes('календарь')) return 'calendar';
   if (source.includes('gallery') || source.includes('галерея')) return 'gallery';
   if (source.includes('kanban') || source.includes('канбан')) return 'kanban';
-  if (source.includes('architecture') || source.includes('архитектура')) return 'architecture';
+  if (source.includes('architecture') || source.includes('архитектура')) return 'table';
   if (source.includes('gantt') || source.includes('гант')) return 'gantt';
-  if (source.includes('grid') || source.includes('сетка')) return 'grid';
+  if (source.includes('grid') || source.includes('сетка')) return 'table';
   if (source.includes('form') || source.includes('форм')) return 'form';
   return 'table';
+}
+
+function extractFieldOptions(field: MwsField | undefined): string[] {
+  if (!field) return [];
+
+  const property = field.property as Record<string, unknown> | undefined;
+  const candidates = [field.options, property?.options, property?.selectOptions];
+  const values = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    for (const option of candidate) {
+      if (typeof option === 'string' && option.trim()) {
+        values.add(option.trim());
+        continue;
+      }
+      if (!option || typeof option !== 'object' || Array.isArray(option)) continue;
+      const record = option as Record<string, unknown>;
+      const value =
+        typeof record.name === 'string' ? record.name :
+        typeof record.label === 'string' ? record.label :
+        typeof record.title === 'string' ? record.title :
+        typeof record.value === 'string' ? record.value :
+        typeof record.text === 'string' ? record.text :
+        '';
+      if (value.trim()) values.add(value.trim());
+    }
+  }
+
+  return Array.from(values);
+}
+
+function getFieldValueStats(fieldId: string, records: MwsRecord[]): { uniqueCount: number; nonEmptyCount: number } {
+  const values = records
+    .map((record) => mwsCellDisplayValue((record.fields || {})[fieldId]).trim())
+    .filter((value) => value.length > 0);
+
+  return {
+    uniqueCount: new Set(values).size,
+    nonEmptyCount: values.length,
+  };
+}
+
+function getKanbanToneClass(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) return 'custom';
+  if (
+    normalized.includes('cancel') ||
+    normalized.includes('canceled') ||
+    normalized.includes('cancelled') ||
+    normalized.includes('declined') ||
+    normalized.includes('rejected')
+  ) return 'blocked';
+  if (
+    normalized.includes('review') ||
+    normalized.includes('approve') ||
+    normalized.includes('approval') ||
+    normalized.includes('qa') ||
+    normalized.includes('test')
+  ) return 'review';
+  if (
+    normalized.includes('wait') ||
+    normalized.includes('pending') ||
+    normalized.includes('hold') ||
+    normalized.includes('queue')
+  ) return 'waiting';
+  if (
+    normalized.includes('urgent') ||
+    normalized.includes('critical') ||
+    normalized.includes('priority') ||
+    normalized.includes('asap')
+  ) return 'urgent';
+  if (normalized.includes('done') || normalized.includes('complete') || normalized.includes('closed')) return 'done';
+  if (normalized.includes('progress') || normalized.includes('review') || normalized.includes('active')) return 'progress';
+  if (normalized.includes('todo') || normalized.includes('planned') || normalized.includes('to do') || normalized.includes('backlog')) return 'todo';
+  return 'custom';
 }
 
 function parseDateValue(raw: unknown): string | null {
@@ -250,6 +326,8 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   const [filterText, setFilterText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
+  const [draggedKanbanRecordId, setDraggedKanbanRecordId] = useState<string | null>(null);
+  const [addingKanbanColumn, setAddingKanbanColumn] = useState<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthKey());
   const viewMode = useMemo(() => normalizeViewMode(viewType, viewName), [viewType, viewName]);
@@ -345,9 +423,9 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     return result;
   }, [records, page, filterText, sortField, sortAsc]);
 
-  const updateCell = async (recordId: string, fieldId: string, value: string) => {
+  const updateCell = async (recordId: string, fieldId: string, value: string, force = false) => {
     const targetField = normalizedFields.find((field) => field.id === fieldId);
-    if (!targetField?.editable) return;
+    if (!targetField || (!targetField.editable && !force)) return;
 
     const cellKey = `${recordId}:${fieldId}`;
     setSavingCells((prev) => new Set(prev).add(cellKey));
@@ -417,6 +495,33 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     }
   };
 
+  const addKanbanCard = async (column: string) => {
+    if (addingKanbanColumn) return;
+
+    const nextRecordFields: Record<string, string> = {};
+    const titleFieldId = primaryEditableFieldId || primaryFieldId;
+
+    if (titleFieldId) {
+      nextRecordFields[titleFieldId] = 'Новая запись';
+    }
+    if (statusFieldId && column !== 'No status') {
+      nextRecordFields[statusFieldId] = column;
+    }
+    if (Object.keys(nextRecordFields).length === 0) return;
+
+    setAddingKanbanColumn(column);
+    try {
+      await api.createRecords(dstId, {
+        records: [{ fields: nextRecordFields }],
+      });
+      await load(page);
+    } catch {
+      // ignore
+    } finally {
+      setAddingKanbanColumn(null);
+    }
+  };
+
   const toggleSort = (fieldId: string) => {
     if (sortField === fieldId) {
       setSortAsc((prev) => !prev);
@@ -465,16 +570,42 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
       })?.id || dateFieldId,
     [dateFieldId, normalizedFields]
   );
-  const statusFieldId = useMemo(
-    () =>
-      normalizedFields.find((field) =>
-        field.name.toLowerCase().includes('status') ||
-        field.name.toLowerCase().includes('статус') ||
-        field.name.toLowerCase().includes('этап') ||
-        field.name.toLowerCase().includes('stage')
-      )?.id || '',
-    [normalizedFields]
-  );
+  const statusFieldId = useMemo(() => {
+    const candidates = normalizedFields
+      .filter((field) => field.id && field.id !== normalizedFields[0]?.id)
+      .map((field) => {
+        const lowerName = field.name.toLowerCase();
+        const typeHint = (field.typeHint || '').toLowerCase();
+        const options = extractFieldOptions(field.raw);
+        const stats = getFieldValueStats(field.id, records);
+        let score = 0;
+
+        if (
+          lowerName.includes('status') ||
+          lowerName.includes('stage') ||
+          lowerName.includes('state') ||
+          lowerName.includes('option') ||
+          lowerName.includes('select') ||
+          lowerName.includes('category')
+        ) {
+          score += 100;
+        }
+        if (typeHint.includes('select')) score += 80;
+        if (options.length > 0) score += 60;
+        if (stats.nonEmptyCount > 0 && stats.uniqueCount > 0 && stats.uniqueCount <= 12) {
+          score += 40 - stats.uniqueCount;
+        }
+        if (stats.nonEmptyCount >= Math.max(2, Math.floor(records.length / 2))) {
+          score += 20;
+        }
+
+        return { fieldId: field.id, score };
+      })
+      .sort((left, right) => right.score - left.score);
+
+    if (candidates[0] && candidates[0].score > 0) return candidates[0].fieldId;
+    return '';
+  }, [normalizedFields, records]);
   const imageFieldId = useMemo(
     () =>
       normalizedFields.find((field) => {
@@ -490,6 +621,27 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
       })?.id || '',
     [normalizedFields]
   );
+  const primaryEditableFieldId = useMemo(
+    () => normalizedFields.find((field) => field.editable)?.id || '',
+    [normalizedFields]
+  );
+  const statusField = useMemo(
+    () => normalizedFields.find((field) => field.id === statusFieldId)?.raw as MwsField | undefined,
+    [normalizedFields, statusFieldId]
+  );
+  const kanbanColumns = useMemo(() => {
+    if (!statusFieldId) return ['No status'];
+
+    const values = new Set<string>(extractFieldOptions(statusField));
+    values.add('No status');
+
+    for (const record of records) {
+      const value = mwsCellDisplayValue((record.fields || {})[statusFieldId]).trim() || 'No status';
+      values.add(value);
+    }
+
+    return Array.from(values);
+  }, [records, statusField, statusFieldId]);
 
   const calendarEntries = useMemo(
     () =>
@@ -607,27 +759,99 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   );
 
   const renderKanbanView = () => {
-    const grouped = new Map<string, MwsRecord[]>();
+    if (!statusFieldId) {
+      return <div className="table-embed-empty">Status field is missing for this kanban view.</div>;
+    }
+
+    const grouped = new Map<string, MwsRecord[]>(kanbanColumns.map((column) => [column, []]));
     for (const record of filteredRecords) {
-      const key = statusFieldId ? (mwsCellDisplayValue((record.fields || {})[statusFieldId]) || 'Без статуса') : 'Записи';
+      const key = mwsCellDisplayValue((record.fields || {})[statusFieldId]).trim() || 'No status';
       grouped.set(key, [...(grouped.get(key) || []), record]);
     }
+
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(grouped.size, 1)}, minmax(220px, 1fr))`, gap: 12 }}>
-        {Array.from(grouped.entries()).map(([group, items]) => (
-          <section key={group} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 12, background: 'var(--bg)' }}>
-            <div style={{ fontWeight: 700, marginBottom: 10 }}>{group}</div>
-            {items.map((record) => {
-              const recordId = record.recordId || record.id || '';
-              const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`;
-              return (
-                <div key={recordId} style={{ padding: 10, borderRadius: 8, background: 'var(--surface)', marginBottom: 8 }}>
-                  {titleValue}
+      <div className="table-embed-kanban-view">
+        <div className="table-embed-kanban-head">
+          <span className="table-embed-kanban-title">KANBAN</span>
+          <span className="table-embed-kanban-note">Перетаскивайте карточки между колонками и редактируйте их справа</span>
+        </div>
+        <div className="table-embed-kanban-toolbar">
+          <button
+            type="button"
+            className="table-embed-kanban-primary"
+            onClick={() => void addKanbanCard(kanbanColumns[0] || 'No status')}
+            disabled={Boolean(addingKanbanColumn) || (!primaryEditableFieldId && !statusFieldId)}
+          >
+            {addingKanbanColumn ? 'Creating...' : 'New task'}
+          </button>
+        </div>
+        <div className="page-kanban table-embed-kanban-board">
+          {Array.from(grouped.entries()).map(([group, items]) => {
+            const toneClass = getKanbanToneClass(group);
+            return (
+              <section
+                key={group}
+                className="page-kanban-col table-embed-kanban-col"
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={() => {
+                  if (!draggedKanbanRecordId) return;
+                void updateCell(draggedKanbanRecordId, statusFieldId, group === 'No status' ? '' : group, true);
+                setDraggedKanbanRecordId(null);
+              }}
+            >
+              <header className={`page-kanban-col-header is-${toneClass} table-embed-kanban-col-header`}>
+                <div className="page-kanban-col-title-wrap table-embed-kanban-col-title-wrap">
+                  <span className={`page-kanban-col-dot is-${toneClass} table-embed-kanban-col-dot is-${toneClass}`} />
+                  <span className="table-embed-kanban-col-title">{group}</span>
                 </div>
-              );
-            })}
+                <span className="page-kanban-col-count table-embed-kanban-col-count">{items.length}</span>
+              </header>
+              <div className="table-embed-kanban-col-body">
+                  {items.length > 0 ? items.map((record) => {
+                    const recordId = record.recordId || record.id || '';
+                    const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Record ${recordId}`;
+                    const previewFields = normalizedFields
+                      .filter((field) => field.id !== primaryFieldId && field.id !== statusFieldId)
+                      .slice(0, 1);
+                    const isDragging = draggedKanbanRecordId === recordId;
+                    const cardLabel = previewFields[0] ? formatFieldDisplayValue(previewFields[0], (record.fields || {})[previewFields[0].id]) : title || 'TEXT';
+
+                    return (
+                      <article
+                        key={recordId}
+                        className={`page-kanban-card table-embed-kanban-card${isDragging ? ' is-dragging' : ''}`}
+                        draggable
+                        onDragStart={() => setDraggedKanbanRecordId(recordId)}
+                        onDragEnd={() => setDraggedKanbanRecordId(null)}
+                      >
+                        <div className="table-embed-kanban-card-type">{cardLabel}</div>
+                        <h4>{titleValue}</h4>
+                        <span className={`page-kanban-card-status table-embed-kanban-card-status is-${toneClass}`}>{group}</span>
+                      </article>
+                    );
+                  }) : <div className="page-kanban-empty table-embed-kanban-empty">Пусто</div>}
+                </div>
+                <button
+                  type="button"
+                  className="table-embed-kanban-add-card"
+                  onClick={() => void addKanbanCard(group)}
+                  disabled={addingKanbanColumn === group || (!primaryEditableFieldId && !statusFieldId)}
+                >
+                  <span>+</span>
+                </button>
+              </section>
+            );
+          })}
+          <section className="page-kanban-col page-kanban-col--creator table-embed-kanban-creator">
+            <button type="button" className="page-kanban-add-col" disabled title="Группы для MWS пока создаются в самой таблице">
+              <span className="page-kanban-add-col-icon">+</span>
+              <span>Новая группа</span>
+            </button>
           </section>
-        ))}
+        </div>
       </div>
     );
   };
@@ -755,6 +979,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
   return (
     <div className="table-embed">
+      {viewMode !== 'kanban' && (
       <div className="table-embed-header">
         <div className="table-embed-title-group">
           <span className="table-embed-title">{title || `Таблица ${dstId}`}</span>
@@ -800,8 +1025,9 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
           </button>
         </div>
       </div>
+      )}
 
-      {error && (
+      {error && viewMode !== 'kanban' && (
         <div className="table-embed-error">
           <div className="table-embed-error-copy">
             <strong>Не удалось обновить таблицу.</strong>
@@ -964,7 +1190,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
       {viewMode === 'gantt' && renderGanttView()}
       {viewMode === 'form' && renderFormView()}
 
-      <div className="table-embed-footer">
+      {viewMode !== 'kanban' && <div className="table-embed-footer">
         <span className="table-embed-count">
           Показано: {filteredRecords.length}
           {filterText ? ` (из ${records.length})` : ''}
@@ -979,7 +1205,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
             Загрузить ещё
           </button>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

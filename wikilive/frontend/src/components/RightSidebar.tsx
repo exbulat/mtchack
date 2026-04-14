@@ -32,6 +32,13 @@ type DragItem =
   | { type: 'folder'; id: string }
   | null;
 
+type FolderState = {
+  folders: FolderRecord[];
+  pageToFolder: Record<string, string>;
+  pageOrder: string[];
+  folderOrder: string[];
+};
+
 const FOLDER_STORAGE_KEY_PREFIX = 'wikilive-space-folders:';
 const ROOT_DROP_ID = '__root__';
 
@@ -60,18 +67,20 @@ function downloadJsonFile(fileName: string, payload: unknown): void {
   URL.revokeObjectURL(url);
 }
 
-function readFolderState(storageKey: string | null): { folders: FolderRecord[]; pageToFolder: Record<string, string> } {
+function readFolderState(storageKey: string | null): FolderState {
   if (!storageKey) {
-    return { folders: [], pageToFolder: {} };
+    return { folders: [], pageToFolder: {}, pageOrder: [], folderOrder: [] };
   }
 
   try {
     const raw = localStorage.getItem(storageKey);
-    if (!raw) return { folders: [], pageToFolder: {} };
+    if (!raw) return { folders: [], pageToFolder: {}, pageOrder: [], folderOrder: [] };
 
     const parsed = JSON.parse(raw) as {
       folders?: Array<Partial<FolderRecord>>;
       pageToFolder?: Record<string, string>;
+      pageOrder?: string[];
+      folderOrder?: string[];
     };
 
     const folders = Array.isArray(parsed.folders)
@@ -101,11 +110,47 @@ function readFolderState(storageKey: string | null): { folders: FolderRecord[]; 
           )
         : {};
 
-    return { folders: normalizedFolders, pageToFolder };
+    const pageOrder = Array.isArray(parsed.pageOrder)
+      ? parsed.pageOrder.filter((pageId): pageId is string => typeof pageId === 'string' && pageId.length > 0)
+      : [];
+    const folderOrder = Array.isArray(parsed.folderOrder)
+      ? parsed.folderOrder.filter((folderId): folderId is string => typeof folderId === 'string' && folderId.length > 0 && folderIds.has(folderId))
+      : [];
+
+    return { folders: normalizedFolders, pageToFolder, pageOrder, folderOrder };
   } catch {
     localStorage.removeItem(storageKey);
-    return { folders: [], pageToFolder: {} };
+    return { folders: [], pageToFolder: {}, pageOrder: [], folderOrder: [] };
   }
+}
+
+function reorderIds(ids: string[], movingId: string, targetId: string): string[] {
+  const filtered = ids.filter((id) => id !== movingId);
+  const targetIndex = filtered.indexOf(targetId);
+  if (targetIndex === -1) return [...filtered, movingId];
+  filtered.splice(targetIndex, 0, movingId);
+  return filtered;
+}
+
+function ensureIdsOrder(ids: string[], expectedIds: string[]): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+
+  for (const id of ids) {
+    if (expectedIds.includes(id) && !seen.has(id)) {
+      seen.add(id);
+      next.push(id);
+    }
+  }
+
+  for (const id of expectedIds) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      next.push(id);
+    }
+  }
+
+  return next;
 }
 
 function parseImportedPage(raw: unknown): ImportedPagePayload | null {
@@ -208,15 +253,26 @@ export default function RightSidebar() {
   const [showSearch, setShowSearch] = useState(false);
   const [folders, setFolders] = useState<FolderRecord[]>([]);
   const [pageToFolder, setPageToFolder] = useState<Record<string, string>>({});
+  const [pageOrder, setPageOrder] = useState<string[]>([]);
+  const [folderOrder, setFolderOrder] = useState<string[]>([]);
   const [openPageMenuId, setOpenPageMenuId] = useState<string | null>(null);
   const [openFolderMenuId, setOpenFolderMenuId] = useState<string | null>(null);
   const [dialogState, setDialogState] = useState<DialogState>(null);
   const [dragItem, setDragItem] = useState<DragItem>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [draggedItemKey, setDraggedItemKey] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { pagesListVersion, bumpPagesList } = useContext(PagesListContext);
 
   const folderMap = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders]);
+  const pageOrderIndex = useMemo(
+    () => new Map(pageOrder.map((pageId, index) => [pageId, index])),
+    [pageOrder]
+  );
+  const folderOrderIndex = useMemo(
+    () => new Map(folderOrder.map((folderId, index) => [folderId, index])),
+    [folderOrder]
+  );
 
   const filteredPages = useMemo(() => {
     if (!searchQuery.trim()) return pages;
@@ -242,6 +298,8 @@ export default function RightSidebar() {
     const nextState = readFolderState(folderStorageKey);
     setFolders(nextState.folders);
     setPageToFolder(nextState.pageToFolder);
+    setPageOrder(nextState.pageOrder);
+    setFolderOrder(nextState.folderOrder);
     setOpenPageMenuId(null);
     setOpenFolderMenuId(null);
     setDialogState(null);
@@ -250,11 +308,11 @@ export default function RightSidebar() {
   useEffect(() => {
     if (!folderStorageKey) return;
     try {
-      localStorage.setItem(folderStorageKey, JSON.stringify({ folders, pageToFolder }));
+      localStorage.setItem(folderStorageKey, JSON.stringify({ folders, pageToFolder, pageOrder, folderOrder }));
     } catch {
       // ignore storage failures
     }
-  }, [folderStorageKey, folders, pageToFolder]);
+  }, [folderStorageKey, folderOrder, folders, pageOrder, pageToFolder]);
 
   useEffect(() => {
     const pageIds = new Set(pages.map((page) => page.id));
@@ -266,6 +324,9 @@ export default function RightSidebar() {
       );
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
+
+    setPageOrder((prev) => ensureIdsOrder(prev, pages.map((page) => page.id)));
+    setFolderOrder((prev) => ensureIdsOrder(prev, folders.map((folder) => folder.id)));
   }, [folders, pages]);
 
   useEffect(() => {
@@ -302,9 +363,15 @@ export default function RightSidebar() {
     [dragItem, folderMap, folders]
   );
 
+  const canDropOnPage = useCallback(
+    (targetPageId: string) => dragItem?.type === 'page' && dragItem.id !== targetPageId,
+    [dragItem]
+  );
+
   const clearDragState = () => {
     setDragItem(null);
     setDropTargetId(null);
+    setDraggedItemKey(null);
   };
 
   const applyDrop = useCallback(
@@ -321,17 +388,38 @@ export default function RightSidebar() {
           else next[dragItem.id] = targetFolderId;
           return next;
         });
+        setPageOrder((prev) => [...prev.filter((pageId) => pageId !== dragItem.id), dragItem.id]);
       } else {
         setFolders((prev) =>
           prev.map((folder) =>
             folder.id === dragItem.id ? { ...folder, parentId: targetFolderId } : folder
           )
         );
+        setFolderOrder((prev) => [...prev.filter((folderId) => folderId !== dragItem.id), dragItem.id]);
       }
 
       clearDragState();
     },
     [canDropIntoFolder, dragItem]
+  );
+
+  const applyPageReorder = useCallback(
+    (targetPageId: string, targetFolderId: string | null) => {
+      if (!dragItem || dragItem.type !== 'page' || !canDropOnPage(targetPageId)) {
+        clearDragState();
+        return;
+      }
+
+      setPageToFolder((prev) => {
+        const next = { ...prev };
+        if (!targetFolderId) delete next[dragItem.id];
+        else next[dragItem.id] = targetFolderId;
+        return next;
+      });
+      setPageOrder((prev) => reorderIds(ensureIdsOrder(prev, pages.map((page) => page.id)), dragItem.id, targetPageId));
+      clearDragState();
+    },
+    [canDropOnPage, dragItem, pages]
   );
 
   const openCreateFolderDialog = (parentId: string | null = null) => {
@@ -353,6 +441,7 @@ export default function RightSidebar() {
       parentId,
     };
     setFolders((prev) => [...prev, folder]);
+    setFolderOrder((prev) => [...prev.filter((folderId) => folderId !== folder.id), folder.id]);
   };
 
   const createPage = async () => {
@@ -362,6 +451,7 @@ export default function RightSidebar() {
     }
     try {
       const page = await api.createSpacePage(currentSpaceId, { title: 'Без названия' });
+      setPageOrder((prev) => [...prev.filter((pageId) => pageId !== page.id), page.id]);
       bumpPagesList();
       navigate(`/spaces/${currentSpaceId}/page/${page.id}`);
     } catch {
@@ -451,6 +541,7 @@ export default function RightSidebar() {
         delete next[pageId];
         return next;
       });
+      setPageOrder((prev) => prev.filter((candidateId) => candidateId !== pageId));
       bumpPagesList();
       setOpenPageMenuId(null);
     } catch {
@@ -472,6 +563,7 @@ export default function RightSidebar() {
           candidate.parentId === folderId ? { ...candidate, parentId: folder.parentId } : candidate
         )
     );
+    setFolderOrder((prev) => prev.filter((candidateId) => candidateId !== folderId));
 
     setPageToFolder((prev) => {
       const next: Record<string, string> = {};
@@ -516,6 +608,7 @@ export default function RightSidebar() {
         content: imported.content,
       });
 
+      setPageOrder((prev) => [...prev.filter((pageId) => pageId !== created.id), created.id]);
       bumpPagesList();
       navigate(`/spaces/${currentSpaceId}/page/${created.id}`);
     } catch {
@@ -528,18 +621,53 @@ export default function RightSidebar() {
     const href = `/spaces/${currentSpaceId}/page/${page.id}`;
     const isMenuOpen = openPageMenuId === page.id;
     const assignedFolderId = pageToFolder[page.id] || null;
+    const isDragging = draggedItemKey === `page:${page.id}`;
+    const isDropTarget = dropTargetId === `page:${page.id}`;
+    const canDropHere = canDropOnPage(page.id);
 
     return (
-      <div key={page.id} style={{ position: 'relative' }}>
+      <div
+        key={page.id}
+        draggable
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', `page:${page.id}`);
+          setDragItem({ type: 'page', id: page.id });
+          setDraggedItemKey(`page:${page.id}`);
+        }}
+        onDragEnd={clearDragState}
+        onDragEnter={(event) => {
+          if (!canDropHere) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setDropTargetId(`page:${page.id}`);
+        }}
+        onDragOver={(event) => {
+          if (!canDropHere) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = 'move';
+          setDropTargetId(`page:${page.id}`);
+        }}
+        onDragLeave={(event) => {
+          event.stopPropagation();
+          if (dropTargetId === `page:${page.id}`) setDropTargetId(null);
+        }}
+        onDrop={(event) => {
+          if (!canDropHere) return;
+          event.preventDefault();
+          event.stopPropagation();
+          applyPageReorder(page.id, assignedFolderId);
+        }}
+        style={{
+          position: 'relative',
+          opacity: isDragging ? 0.72 : 1,
+          transform: isDragging ? 'scale(0.985)' : 'scale(1)',
+          transition: 'opacity 0.14s ease, transform 0.14s ease',
+        }}
+      >
         <NavLink
           to={href}
-          draggable
-          onDragStart={(event) => {
-            event.dataTransfer.effectAllowed = 'move';
-            event.dataTransfer.setData('text/plain', `page:${page.id}`);
-            setDragItem({ type: 'page', id: page.id });
-          }}
-          onDragEnd={clearDragState}
           className={() => `right-sidebar-item${isActive ? ' active' : ''}`}
           style={{
             ...nodeRowStyle,
@@ -548,6 +676,12 @@ export default function RightSidebar() {
             borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
             cursor: 'grab',
             color: 'var(--text)',
+            boxShadow: isDropTarget
+              ? 'inset 0 0 0 1px var(--accent-border), 0 8px 18px color-mix(in srgb, var(--accent) 10%, transparent)'
+              : isDragging
+                ? '0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent)'
+                : 'none',
+            transition: 'background 0.15s ease, box-shadow 0.15s ease',
           }}
         >
           <span style={nodeMainStyle}>
@@ -610,11 +744,18 @@ export default function RightSidebar() {
   const renderFolderTree = (parentId: string | null, depth: number): React.ReactNode => {
     const nestedFolders = folders
       .filter((folder) => folder.parentId === parentId)
-      .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+      .sort((left, right) => {
+        const leftIndex = folderOrderIndex.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+        const rightIndex = folderOrderIndex.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+        if (leftIndex !== rightIndex) return leftIndex - rightIndex;
+        return left.name.localeCompare(right.name, 'ru');
+      });
 
     return nestedFolders.map((folder) => {
       const isMenuOpen = openFolderMenuId === folder.id;
-      const folderPages = filteredPages.filter((page) => pageToFolder[page.id] === folder.id);
+      const folderPages = filteredPages
+        .filter((page) => pageToFolder[page.id] === folder.id)
+        .sort((left, right) => (pageOrderIndex.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (pageOrderIndex.get(right.id) ?? Number.MAX_SAFE_INTEGER));
       const childFolders = folders.filter((candidate) => candidate.parentId === folder.id);
       const hasSearchResults = searchQuery
         ? folderPages.length > 0 || childFolders.some((candidate) => candidate.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -626,27 +767,53 @@ export default function RightSidebar() {
 
       const canDrop = canDropIntoFolder(folder.id);
       const isDropTarget = dropTargetId === folder.id;
+      const isDraggingFolder = draggedItemKey === `folder:${folder.id}`;
 
       return (
         <div key={folder.id} style={{ position: 'relative' }}>
           <div
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'move';
+              event.dataTransfer.setData('text/plain', `folder:${folder.id}`);
+              setDragItem({ type: 'folder', id: folder.id });
+              setDraggedItemKey(`folder:${folder.id}`);
+            }}
+            onDragEnd={clearDragState}
+            onDragEnter={(event) => {
+              if (!canDrop) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setDropTargetId(folder.id);
+            }}
             onDragOver={(event) => {
               if (!canDrop) return;
               event.preventDefault();
+              event.stopPropagation();
+              event.dataTransfer.dropEffect = 'move';
               setDropTargetId(folder.id);
             }}
-            onDragLeave={() => {
+            onDragLeave={(event) => {
+              event.stopPropagation();
               if (dropTargetId === folder.id) setDropTargetId(null);
             }}
             onDrop={(event) => {
               event.preventDefault();
+              event.stopPropagation();
               applyDrop(folder.id);
             }}
             style={{
               ...nodeRowStyle,
               paddingLeft: 14 + depth * 20,
               background: isDropTarget ? 'var(--accent-dim)' : 'transparent',
-              boxShadow: isDropTarget ? 'inset 0 0 0 1px var(--accent-border)' : 'none',
+              boxShadow: isDropTarget
+                ? 'inset 0 0 0 1px var(--accent-border), 0 8px 18px color-mix(in srgb, var(--accent) 10%, transparent)'
+                : isDraggingFolder
+                  ? '0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent)'
+                  : 'none',
+              opacity: isDraggingFolder ? 0.72 : 1,
+              transform: isDraggingFolder ? 'scale(0.985)' : 'scale(1)',
+              transition: 'background 0.15s ease, box-shadow 0.15s ease, opacity 0.14s ease, transform 0.14s ease',
             }}
           >
             <button
@@ -662,16 +829,7 @@ export default function RightSidebar() {
             >
               {folder.expanded ? '▾' : '▸'}
             </button>
-            <div
-              draggable
-              onDragStart={(event) => {
-                event.dataTransfer.effectAllowed = 'move';
-                event.dataTransfer.setData('text/plain', `folder:${folder.id}`);
-                setDragItem({ type: 'folder', id: folder.id });
-              }}
-              onDragEnd={clearDragState}
-              style={folderDragHandleStyle}
-            >
+            <div style={folderDragHandleStyle}>
               <span style={folderIconStyle}>🗂</span>
               <span style={nodeLabelStyle}>{folder.name}</span>
             </div>
@@ -721,7 +879,9 @@ export default function RightSidebar() {
     });
   };
 
-  const rootPages = filteredPages.filter((page) => !pageToFolder[page.id]);
+  const rootPages = filteredPages
+    .filter((page) => !pageToFolder[page.id])
+    .sort((left, right) => (pageOrderIndex.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (pageOrderIndex.get(right.id) ?? Number.MAX_SAFE_INTEGER));
   const hasRootDrop = canDropIntoFolder(null);
 
   if (!currentSpaceId) {
@@ -788,9 +948,15 @@ export default function RightSidebar() {
 
         <div
           style={treeContainerStyle}
+          onDragEnter={(event) => {
+            if (!hasRootDrop) return;
+            event.preventDefault();
+            setDropTargetId(ROOT_DROP_ID);
+          }}
           onDragOver={(event) => {
             if (!hasRootDrop) return;
             event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
             setDropTargetId(ROOT_DROP_ID);
           }}
           onDragLeave={() => {
