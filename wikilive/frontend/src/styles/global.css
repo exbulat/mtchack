@@ -3291,7 +3291,6 @@ strong { color: var(--text); font-weight: 600; }
 }
 .table-embed-btn:hover:not(:disabled) { background: var(--bg-secondary); color: var(--text); }
 .table-embed-btn:disabled { opacity: 0.5; cursor: default; }
-.table-embed-btn--add { color: var(--accent); border-color: var(--accent); }
 .table-embed-btn--save { color: #22c55e; border-color: #22c55e; padding: 0 6px; }
 .table-embed-btn--cancel { color: var(--text-muted); padding: 0 6px; }
 .table-embed-btn--delete { color: var(--text-muted); padding: 0 6px; opacity: 0; transition: opacity 0.15s; }
@@ -3315,6 +3314,7 @@ strong { color: var(--text); font-weight: 600; }
 }
 .table-embed-th:hover { color: var(--text); }
 .table-embed-th--actions { width: 36px; cursor: default; }
+.table-embed-th--drag { width: 36px; cursor: default; }
 .table-embed-sort-icon { color: var(--accent); }
 
 .table-embed td { padding: 5px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
@@ -3322,6 +3322,57 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed tr:hover .table-embed-btn--delete { opacity: 1; }
 .table-embed tr:hover td { background: var(--bg-secondary); }
 .table-embed-actions { padding: 5px 6px !important; }
+.table-embed-drag-cell {
+  width: 36px;
+  padding: 5px 6px !important;
+  text-align: center;
+}
+.table-embed-row-drag-handle {
+  width: 20px;
+  height: 20px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+  line-height: 1;
+  font-size: 12px;
+}
+.table-embed-row-drag-handle:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border);
+}
+.table-embed-row-drag-handle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.table-embed-row--dragging {
+  opacity: 0.5;
+}
+.table-embed-row--drop-target td {
+  box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+}
+.table-embed-row--moving {
+  opacity: 0.75;
+}
+
+.right-sidebar-draggable-row .right-sidebar-drag-handle {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-2px);
+  transition: opacity 0.14s ease, transform 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+.right-sidebar-draggable-row:hover .right-sidebar-drag-handle,
+.right-sidebar-draggable-row.is-dragging .right-sidebar-drag-handle,
+.right-sidebar-drag-handle:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+.right-sidebar-drag-handle:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
 
 .table-embed-cell-input {
   border: none; outline: none; background: transparent;

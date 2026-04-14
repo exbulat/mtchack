@@ -374,6 +374,18 @@ export default function RightSidebar() {
     setDraggedItemKey(null);
   };
 
+  const startDraggingItem = useCallback(
+    (event: React.DragEvent<HTMLElement>, item: Exclude<DragItem, null>) => {
+      event.stopPropagation();
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('application/x-wikilive-sidebar-item', `${item.type}:${item.id}`);
+      event.dataTransfer.setData('text/plain', `${item.type}:${item.id}`);
+      setDragItem(item);
+      setDraggedItemKey(`${item.type}:${item.id}`);
+    },
+    []
+  );
+
   const applyDrop = useCallback(
     (targetFolderId: string | null) => {
       if (!dragItem || !canDropIntoFolder(targetFolderId)) {
@@ -628,13 +640,7 @@ export default function RightSidebar() {
     return (
       <div
         key={page.id}
-        draggable
-        onDragStart={(event) => {
-          event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData('text/plain', `page:${page.id}`);
-          setDragItem({ type: 'page', id: page.id });
-          setDraggedItemKey(`page:${page.id}`);
-        }}
+        className={`right-sidebar-draggable-row${isDragging ? ' is-dragging' : ''}`}
         onDragEnd={clearDragState}
         onDragEnter={(event) => {
           if (!canDropHere) return;
@@ -661,8 +667,9 @@ export default function RightSidebar() {
         }}
         style={{
           position: 'relative',
+          zIndex: isMenuOpen ? 50 : isDragging ? 30 : isDropTarget ? 20 : 1,
           opacity: isDragging ? 0.72 : 1,
-          transform: isDragging ? 'scale(0.985)' : 'scale(1)',
+          transform: isDragging ? 'scale(0.985)' : undefined,
           transition: 'opacity 0.14s ease, transform 0.14s ease',
         }}
       >
@@ -674,7 +681,6 @@ export default function RightSidebar() {
             paddingLeft: 18 + depth * 20,
             background: isActive ? 'var(--accent-dim)' : 'transparent',
             borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-            cursor: 'grab',
             color: 'var(--text)',
             boxShadow: isDropTarget
               ? 'inset 0 0 0 1px var(--accent-border), 0 8px 18px color-mix(in srgb, var(--accent) 10%, transparent)'
@@ -685,6 +691,25 @@ export default function RightSidebar() {
           }}
         >
           <span style={nodeMainStyle}>
+            <button
+              type="button"
+              draggable
+              className="right-sidebar-drag-handle"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                event.stopPropagation();
+              }}
+              onDragStart={(event) => startDraggingItem(event, { type: 'page', id: page.id })}
+              onDragEnd={clearDragState}
+              aria-label="Переместить страницу"
+              title="Перетащите, чтобы переместить"
+              style={dragHandleButtonStyle}
+            >
+              ⋮⋮
+            </button>
             <span style={pageIconStyle}>#</span>
             <span style={nodeLabelStyle}>{page.title || 'Без названия'}</span>
           </span>
@@ -772,13 +797,7 @@ export default function RightSidebar() {
       return (
         <div key={folder.id} style={{ position: 'relative' }}>
           <div
-            draggable
-            onDragStart={(event) => {
-              event.dataTransfer.effectAllowed = 'move';
-              event.dataTransfer.setData('text/plain', `folder:${folder.id}`);
-              setDragItem({ type: 'folder', id: folder.id });
-              setDraggedItemKey(`folder:${folder.id}`);
-            }}
+            className={`right-sidebar-draggable-row${isDraggingFolder ? ' is-dragging' : ''}`}
             onDragEnd={clearDragState}
             onDragEnter={(event) => {
               if (!canDrop) return;
@@ -805,6 +824,8 @@ export default function RightSidebar() {
             style={{
               ...nodeRowStyle,
               paddingLeft: 14 + depth * 20,
+              position: 'relative',
+              zIndex: isMenuOpen ? 50 : isDraggingFolder ? 30 : isDropTarget ? 20 : 1,
               background: isDropTarget ? 'var(--accent-dim)' : 'transparent',
               boxShadow: isDropTarget
                 ? 'inset 0 0 0 1px var(--accent-border), 0 8px 18px color-mix(in srgb, var(--accent) 10%, transparent)'
@@ -812,7 +833,7 @@ export default function RightSidebar() {
                   ? '0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent)'
                   : 'none',
               opacity: isDraggingFolder ? 0.72 : 1,
-              transform: isDraggingFolder ? 'scale(0.985)' : 'scale(1)',
+              transform: isDraggingFolder ? 'scale(0.985)' : undefined,
               transition: 'background 0.15s ease, box-shadow 0.15s ease, opacity 0.14s ease, transform 0.14s ease',
             }}
           >
@@ -830,6 +851,25 @@ export default function RightSidebar() {
               {folder.expanded ? '▾' : '▸'}
             </button>
             <div style={folderDragHandleStyle}>
+              <button
+                type="button"
+                draggable
+                className="right-sidebar-drag-handle"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                event.stopPropagation();
+              }}
+                onDragStart={(event) => startDraggingItem(event, { type: 'folder', id: folder.id })}
+                onDragEnd={clearDragState}
+                aria-label="Переместить папку"
+                title="Перетащите, чтобы переместить"
+                style={dragHandleButtonStyle}
+              >
+                ⋮⋮
+              </button>
               <span style={folderIconStyle}>🗂</span>
               <span style={nodeLabelStyle}>{folder.name}</span>
             </div>
@@ -1194,7 +1234,23 @@ const folderDragHandleStyle: CSSProperties = {
   gap: 8,
   flex: 1,
   minWidth: 0,
+};
+
+const dragHandleButtonStyle: CSSProperties = {
+  width: 18,
+  height: 18,
+  border: '1px solid transparent',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--text-muted)',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+  lineHeight: 1,
+  fontSize: 12,
   cursor: 'grab',
+  flexShrink: 0,
 };
 
 const menuStyle: CSSProperties = {

@@ -81,6 +81,33 @@ function validateFieldsBody(body: unknown): Record<string, unknown> | null {
   return obj;
 }
 
+function validateMoveRecordsBody(body: unknown): Record<string, unknown> | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const obj = body as Record<string, unknown>;
+  try {
+    const serialized = JSON.stringify(obj);
+    if (serialized.length > MAX_BODY_SIZE) return null;
+  } catch {
+    return null;
+  }
+  const allowedKeys = new Set([
+    'recordId',
+    'recordIds',
+    'viewId',
+    'position',
+    'before',
+    'after',
+    'targetRecordId',
+    'anchorRecordId',
+    'beforeRecordId',
+    'afterRecordId',
+  ]);
+  for (const key of Object.keys(obj)) {
+    if (!allowedKeys.has(key)) return null;
+  }
+  return obj;
+}
+
 function validateNodeUpdateBody(body: unknown): Record<string, unknown> | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const obj = body as Record<string, unknown>;
@@ -448,6 +475,32 @@ router.patch('/datasheets/:dstId/records', async (req: Request, res: Response) =
     res.status(resp.status).json(data);
   } catch {
     res.status(502).json({ error: 'Failed to update records' });
+  }
+});
+
+router.post('/datasheets/:dstId/records/move', async (req: Request, res: Response) => {
+  try {
+    const dstId = validateDstId(req.params.dstId);
+    if (!dstId) {
+      return res.status(400).json({ error: 'Invalid datasheet ID format' });
+    }
+    const validatedBody = validateMoveRecordsBody(req.body);
+    if (!validatedBody) {
+      return res.status(400).json({ error: 'Invalid request body for record move' });
+    }
+
+    const resp = await fetch(
+      `${BASE_URL()}/fusion/v1/datasheets/${encodeURIComponent(dstId)}/records/move`,
+      {
+        method: 'POST',
+        headers: getMwsHeaders(),
+        body: JSON.stringify(validatedBody),
+      }
+    );
+    const data = await resp.json().catch(() => ({}));
+    res.status(resp.status).json(data);
+  } catch {
+    res.status(502).json({ error: 'Failed to move records' });
   }
 });
 

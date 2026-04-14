@@ -232,6 +232,12 @@ export const api = {
       body: JSON.stringify({ fieldKey: 'id', ...body }),
     }),
 
+  moveRecords: (dstId: string, body: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/tables/datasheets/${dstId}/records/move`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   deleteRecords: (dstId: string, recordIds: string[]) =>
     request<Record<string, unknown>>(`/tables/datasheets/${dstId}/records?recordIds=${recordIds.join(',')}`, {
       method: 'DELETE',

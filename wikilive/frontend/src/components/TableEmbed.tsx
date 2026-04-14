@@ -552,6 +552,9 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   const [filterText, setFilterText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
+  const [draggedTableRecordId, setDraggedTableRecordId] = useState<string | null>(null);
+  const [tableDropTargetRecordId, setTableDropTargetRecordId] = useState<string | null>(null);
+  const [movingRows, setMovingRows] = useState<Set<string>>(new Set());
   const [draggedKanbanRecordId, setDraggedKanbanRecordId] = useState<string | null>(null);
   const [addingKanbanColumn, setAddingKanbanColumn] = useState<string | null>(null);
   const [activeKanbanRecordId, setActiveKanbanRecordId] = useState<string | null>(null);
@@ -716,6 +719,106 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     }
     return result;
   }, [records, page, filterText, sortField, sortAsc]);
+
+  const canReorderRows = viewMode === 'table' && !sortField && !filterText.trim() && !showNewRow;
+
+  const reorderRecordsLocally = useCallback((sourceRecordId: string, targetRecordId: string) => {
+    if (!sourceRecordId || !targetRecordId || sourceRecordId === targetRecordId) return false;
+
+    let didReorder = false;
+    setRecords((prev) => {
+      const sourceIndex = prev.findIndex((record) => (record.recordId || record.id || '') === sourceRecordId);
+      const targetIndex = prev.findIndex((record) => (record.recordId || record.id || '') === targetRecordId);
+      if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return prev;
+
+      const next = [...prev];
+      const [movedRecord] = next.splice(sourceIndex, 1);
+      if (!movedRecord) return prev;
+      const insertIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      next.splice(insertIndex, 0, movedRecord);
+      didReorder = true;
+      return next;
+    });
+    return didReorder;
+  }, []);
+
+  const moveRowInMws = useCallback(
+    async (sourceRecordId: string, targetRecordId: string) => {
+      const payloadCandidates: Record<string, unknown>[] = [
+        {
+          recordIds: [sourceRecordId],
+          anchorRecordId: targetRecordId,
+          before: true,
+          ...(viewId ? { viewId } : {}),
+        },
+        {
+          recordId: sourceRecordId,
+          targetRecordId,
+          position: 'before',
+          ...(viewId ? { viewId } : {}),
+        },
+        {
+          recordIds: [sourceRecordId],
+          beforeRecordId: targetRecordId,
+          ...(viewId ? { viewId } : {}),
+        },
+      ];
+
+      for (const payload of payloadCandidates) {
+        try {
+          await api.moveRecords(dstId, payload);
+          return true;
+        } catch {
+          // try next payload format for API compatibility
+        }
+      }
+
+      return false;
+    },
+    [dstId, viewId]
+  );
+
+  const handleTableRowDrop = useCallback(
+    async (targetRecordId: string) => {
+      const sourceRecordId = draggedTableRecordId;
+      setTableDropTargetRecordId(null);
+      setDraggedTableRecordId(null);
+
+      if (!canReorderRows || !sourceRecordId || !targetRecordId || sourceRecordId === targetRecordId) return;
+
+      const previousRecords = records;
+      const reordered = reorderRecordsLocally(sourceRecordId, targetRecordId);
+      if (!reordered) return;
+
+      setMovingRows((prev) => {
+        const next = new Set(prev);
+        next.add(sourceRecordId);
+        next.add(targetRecordId);
+        return next;
+      });
+
+      const moved = await moveRowInMws(sourceRecordId, targetRecordId);
+      if (!moved) {
+        setRecords(previousRecords);
+        setError('Не удалось изменить порядок строк в MWS Tables');
+      } else {
+        setLastLoadedAt(Date.now());
+      }
+
+      setMovingRows((prev) => {
+        const next = new Set(prev);
+        next.delete(sourceRecordId);
+        next.delete(targetRecordId);
+        return next;
+      });
+    },
+    [canReorderRows, draggedTableRecordId, moveRowInMws, records, reorderRecordsLocally]
+  );
+
+  const isTableRowDropTarget = useCallback((target: EventTarget | null) => {
+    if (!(target instanceof Element)) return false;
+    return Boolean(target.closest('tr[data-record-id]'));
+  }, []);
 
   const updateCell = async (
     recordId: string,
@@ -1706,7 +1809,23 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   );
 
   return (
-    <div className="table-embed">
+    <div
+      className="table-embed"
+      onDragOverCapture={(event) => {
+        if (!draggedTableRecordId) return;
+        if (isTableRowDropTarget(event.target)) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onDropCapture={(event) => {
+        if (!draggedTableRecordId) return;
+        if (isTableRowDropTarget(event.target)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setDraggedTableRecordId(null);
+        setTableDropTargetRecordId(null);
+      }}
+    >
       {viewMode !== 'kanban' && (
       <div className="table-embed-header">
         <div className="table-embed-title-group">
@@ -1741,14 +1860,6 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
               disabled={loading}
             >&times;</button>
           )}
-          <button
-            className="table-embed-btn table-embed-btn--add"
-            onClick={() => setShowNewRow((v) => !v)}
-            title="Добавить строку"
-            disabled={viewMode !== 'table' || !hasEditableFields}
-          >
-            + Строка
-          </button>
         </div>
       </div>
       )}
@@ -1775,6 +1886,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         <table>
           <thead>
             <tr>
+              <th className="table-embed-th table-embed-th--drag" title="Переместить строку" />
               {normalizedFields.map((field) => (
                 <th
                   key={field.id}
@@ -1794,6 +1906,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
           <tbody>
             {showNewRow && (
               <tr className="table-embed-new-row">
+                <td className="table-embed-drag-cell" />
                 {normalizedFields.map((field) => (
                   <td key={field.id}>
                     {field.editable ? (
@@ -1838,7 +1951,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
             {!showNewRow && hasEditableFields && (
               <tr className="table-embed-add-row">
-                <td colSpan={normalizedFields.length + 1}>
+                <td colSpan={normalizedFields.length + 2}>
                   <button
                     type="button"
                     className="table-embed-add-row-btn"
@@ -1855,8 +1968,57 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
               const rowFields = record.fields || {};
               if (!recordId) return null;
               const isDeleting = deletingRows.has(recordId);
+              const isDragging = draggedTableRecordId === recordId;
+              const isDropTarget = tableDropTargetRecordId === recordId;
+              const isMoving = movingRows.has(recordId);
               return (
-                <tr key={recordId} className={isDeleting ? 'table-embed-row--deleting' : ''}>
+                <tr
+                  key={recordId}
+                  data-record-id={recordId}
+                  className={[
+                    isDeleting ? 'table-embed-row--deleting' : '',
+                    isDragging ? 'table-embed-row--dragging' : '',
+                    isDropTarget ? 'table-embed-row--drop-target' : '',
+                    isMoving ? 'table-embed-row--moving' : '',
+                  ].filter(Boolean).join(' ')}
+                  draggable={canReorderRows && !isDeleting}
+                  onDragStart={(event) => {
+                    if (!canReorderRows || isDeleting) return;
+                    event.stopPropagation();
+                    setDraggedTableRecordId(recordId);
+                    setTableDropTargetRecordId(null);
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('application/x-wikilive-record-id', recordId);
+                  }}
+                  onDragOver={(event) => {
+                    if (!canReorderRows || !draggedTableRecordId || draggedTableRecordId === recordId) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.dataTransfer.dropEffect = 'move';
+                    setTableDropTargetRecordId(recordId);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void handleTableRowDrop(recordId);
+                  }}
+                  onDragEnd={() => {
+                    // Do not allow table row drags to leak into outer editors/dropzones.
+                    setDraggedTableRecordId(null);
+                    setTableDropTargetRecordId(null);
+                  }}
+                >
+                  <td className="table-embed-drag-cell">
+                    <button
+                      type="button"
+                      className="table-embed-row-drag-handle"
+                      title={canReorderRows ? 'Перетащите для изменения порядка' : 'Сбросьте фильтр и сортировку для перестановки'}
+                      disabled={!canReorderRows || isDeleting || isMoving}
+                      aria-label="Переместить строку"
+                    >
+                      ⋮⋮
+                    </button>
+                  </td>
                   {normalizedFields.map((field) => {
                     const cellKey = `${recordId}:${field.id}`;
                     const isSaving = savingCells.has(cellKey);
@@ -1897,7 +2059,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
             {filteredRecords.length === 0 && !showNewRow && (
               <tr>
-                <td colSpan={normalizedFields.length + 1} className="table-embed-empty">
+                <td colSpan={normalizedFields.length + 2} className="table-embed-empty">
                   {filterText ? 'Ничего не найдено' : 'Нет данных'}
                 </td>
               </tr>
