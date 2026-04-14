@@ -63,6 +63,31 @@ type MwsTableView = {
   viewType?: string;
 };
 
+function normalizeViewRecordTitle(title: string): string {
+  return title.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function buildUniqueViewRecordTitle(title: string, records: ViewRecord[], excludeId?: string): string {
+  const baseTitle = title.trim() || 'Новая запись';
+  const takenTitles = new Set(
+    records
+      .filter((record) => record.id !== excludeId)
+      .map((record) => normalizeViewRecordTitle(record.title))
+  );
+
+  if (!takenTitles.has(normalizeViewRecordTitle(baseTitle))) {
+    return baseTitle;
+  }
+
+  let suffix = 2;
+  let candidate = `${baseTitle} ${suffix}`;
+  while (takenTitles.has(normalizeViewRecordTitle(candidate))) {
+    suffix += 1;
+    candidate = `${baseTitle} ${suffix}`;
+  }
+  return candidate;
+}
+
 const PAGE_VIEW_OPTIONS: PageViewOption[] = [
   { id: 'page', label: 'Страница', icon: 'Pg', working: true },
   { id: 'architecture', label: 'Архитектура', icon: 'Ar', working: true },

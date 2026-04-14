@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
+import type { CSSProperties } from 'react';
 export type KanbanStatus = 'To Do' | 'In Progress' | 'Done' | 'Other';
 
 export type ViewRecord = {
@@ -12,6 +13,7 @@ export type ViewRecord = {
   startDate: string;
   endDate: string;
   image?: string;
+  color?: string;
   typeLabel: string;
   source: 'page' | 'manual';
   order: number;
@@ -134,6 +136,12 @@ function formatWeekdayShort(date: string): string {
   return parsed.toLocaleDateString('ru-RU', { weekday: 'short' });
 }
 
+const GANTT_COLOR_PRESETS = ['#111111', '#1f2937', '#0f766e', '#1d4ed8', '#7c3aed', '#b91c1c', '#ea580c', '#059669'];
+
+function normalizeRecordTitle(title: string): string {
+  return title.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 export default function PageViews({
   activeView,
   activeViewLabel,
@@ -163,6 +171,9 @@ export default function PageViews({
     date: toDateString(getMonthKey(), 1),
   }));
   const [showGanttCreateModal, setShowGanttCreateModal] = useState(false);
+  const [showColorModal, setShowColorModal] = useState(false);
+  const [customColorDraft, setCustomColorDraft] = useState('#111111');
+  const [ganttDraftError, setGanttDraftError] = useState('');
   const [ganttDraft, setGanttDraft] = useState(() => ({
     title: '',
     startDate: formatIsoDate(new Date()),
@@ -186,6 +197,32 @@ export default function PageViews({
   const selectedRecord = sortedRecords.find((record) => record.id === selectedRecordId) ?? null;
   const calendarDays = getDaysInMonth(calendarMonth);
 
+  function hasDuplicateTitle(title: string, excludeId?: string): boolean {
+    const normalized = normalizeRecordTitle(title);
+    if (!normalized) return false;
+    return sortedRecords.some(
+      (record) => record.id !== excludeId && normalizeRecordTitle(record.title) === normalized
+    );
+  }
+
+  function createRecordWithUniqueTitle(seed?: Partial<ViewRecord>): string {
+    const requestedTitle = seed?.title?.trim() || 'Новая запись';
+    let nextTitle = requestedTitle;
+    let suffix = 2;
+    while (hasDuplicateTitle(nextTitle)) {
+      nextTitle = `${requestedTitle} ${suffix}`;
+      suffix += 1;
+    }
+    return onCreateRecord({ ...seed, title: nextTitle });
+  }
+
+  function updateRecordTitle(recordId: string, title: string): void {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    if (hasDuplicateTitle(trimmed, recordId)) return;
+    onUpdateRecord(recordId, { title: trimmed });
+  }
+
   useEffect(() => {
     if (!selectedRecordId) return;
     if (sortedRecords.some((record) => record.id === selectedRecordId)) return;
@@ -197,6 +234,10 @@ export default function PageViews({
     if (!nextCenter) return;
     setGanttCenterDate((prev) => prev || nextCenter);
   }, [records]);
+
+  useEffect(() => {
+    setCustomColorDraft(selectedRecord?.color || '#111111');
+  }, [selectedRecord?.id, selectedRecord?.color]);
 
   useEffect(() => {
     if (!ganttDrag) return;
@@ -252,7 +293,7 @@ export default function PageViews({
   }
 
   function createCalendarRecord(date: string): void {
-    const recordId = onCreateRecord({
+    const recordId = createRecordWithUniqueTitle({
       title: 'Новое событие',
       date,
       startDate: date,
@@ -265,7 +306,7 @@ export default function PageViews({
 
   function submitCalendarDraft(): void {
     if (!calendarDraft.title.trim() || !calendarDraft.date) return;
-    const recordId = onCreateRecord({
+    const recordId = createRecordWithUniqueTitle({
       title: calendarDraft.title.trim(),
       date: calendarDraft.date,
       startDate: calendarDraft.date,
@@ -285,12 +326,28 @@ export default function PageViews({
       status: 'To Do',
       notes: '',
     });
+    setGanttDraftError('');
     setShowGanttCreateModal(true);
+  }
+
+  function openColorModal(): void {
+    setCustomColorDraft(selectedRecord?.color || '#111111');
+    setShowColorModal(true);
+  }
+
+  function saveCustomColor(): void {
+    if (!selectedRecord) return;
+    onUpdateRecord(selectedRecord.id, { color: customColorDraft });
+    setShowColorModal(false);
   }
 
   function submitGanttDraft(): void {
     const title = ganttDraft.title.trim();
     if (!title || !ganttDraft.startDate || !ganttDraft.endDate) return;
+    if (hasDuplicateTitle(title)) {
+      setGanttDraftError('Задача с таким названием уже есть');
+      return;
+    }
 
     const startDate = ganttDraft.startDate <= ganttDraft.endDate ? ganttDraft.startDate : ganttDraft.endDate;
     const endDate = ganttDraft.endDate >= ganttDraft.startDate ? ganttDraft.endDate : ganttDraft.startDate;
@@ -305,8 +362,10 @@ export default function PageViews({
       status: ganttDraft.status,
       notes,
       excerpt: notes,
+      color: '#111111',
     });
     onSelectRecord(recordId);
+    setGanttDraftError('');
     setShowGanttCreateModal(false);
   }
 
@@ -347,7 +406,7 @@ export default function PageViews({
           <span className="page-grid-view-note">Карточки можно перетаскивать и редактировать</span>
         </div>
         <div className="page-view-actions">
-          <button type="button" className="btn btn-primary" onClick={() => onSelectRecord(onCreateRecord({ title: 'Новая запись', typeLabel: 'Запись' }))}>
+          <button type="button" className="btn btn-primary" onClick={() => onSelectRecord(createRecordWithUniqueTitle({ title: 'Новая запись', typeLabel: 'Запись' }))}>
             Новая запись
           </button>
         </div>
@@ -388,7 +447,7 @@ export default function PageViews({
           <span className="page-grid-view-note">К карточкам можно прикреплять изображения</span>
         </div>
         <div className="page-view-actions">
-          <button type="button" className="btn btn-primary" onClick={() => onSelectRecord(onCreateRecord({ title: 'Новая карточка', typeLabel: 'Галерея' }))}>
+          <button type="button" className="btn btn-primary" onClick={() => onSelectRecord(createRecordWithUniqueTitle({ title: 'Новая карточка', typeLabel: 'Галерея' }))}>
             Новая карточка
           </button>
         </div>
@@ -446,7 +505,7 @@ export default function PageViews({
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => onSelectRecord(onCreateRecord({ title: 'Новая задача', typeLabel: 'Задача', status: 'To Do' }))}
+            onClick={() => onSelectRecord(createRecordWithUniqueTitle({ title: 'Новая задача', typeLabel: 'Задача', status: 'To Do' }))}
           >
             Новая задача
           </button>
@@ -684,7 +743,14 @@ export default function PageViews({
               const startOffset = diffDays(timelineStart, start);
               const duration = Math.max(1, diffDays(start, end) + 1);
               const left = `${(startOffset / timelineDays.length) * 100}%`;
-              const width = `${(duration / timelineDays.length) * 100}%`;
+              const widthPercent = `${(duration / timelineDays.length) * 100}%`;
+              const minBarWidth = Math.round(sidebarWidth * 0.88);
+              const barStyle = {
+                left,
+                width: `max(${widthPercent}, ${minBarWidth}px)`,
+                maxWidth: `calc(100% - ${left})`,
+                '--gantt-bar-color': item.color || '#111111',
+              } as CSSProperties;
               return (
                 <div key={item.id} className="page-gantt-row" style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}>
                   {isGanttSidebarCollapsed ? (
@@ -697,18 +763,12 @@ export default function PageViews({
                     >
                       <span className={`page-gantt-label-badge is-${statusClassName(item.status)}`}>{statusLabel(item.status)}</span>
                       <span className="page-gantt-label-title">{item.title}</span>
-                      <span className="page-gantt-label-meta">
-                        {formatShortDate(start)} - {formatShortDate(end)}
-                      </span>
-                      <span className="page-gantt-label-submeta">
-                        {duration} дн. {item.typeLabel ? `• ${item.typeLabel}` : ''}
-                      </span>
                     </button>
                   )}
                   <div className="page-gantt-track" style={{ backgroundSize: timelineBackgroundSize }}>
                     <div
                       className={`page-gantt-bar${selectedRecordId === item.id ? ' is-selected' : ''}`}
-                      style={{ left, width }}
+                      style={barStyle}
                       onMouseDown={(event) => {
                         setGanttDrag({
                           id: item.id,
@@ -723,6 +783,7 @@ export default function PageViews({
                     >
                       <span
                         className="page-gantt-handle is-start"
+                        title="Растянуть влево"
                         onMouseDown={(event) => {
                           event.stopPropagation();
                           setGanttDrag({
@@ -738,6 +799,7 @@ export default function PageViews({
                       <span className="page-gantt-bar-label">{item.title}</span>
                       <span
                         className="page-gantt-handle is-end"
+                        title="Растянуть вправо"
                         onMouseDown={(event) => {
                           event.stopPropagation();
                           setGanttDrag({
@@ -777,7 +839,7 @@ export default function PageViews({
               placeholder="Название записи"
               value={selectedRecord?.source === 'manual' ? selectedRecord.title : ''}
               onChange={(event) => {
-                if (selectedRecord?.source === 'manual') onUpdateRecord(selectedRecord.id, { title: event.target.value });
+                if (selectedRecord?.source === 'manual') updateRecordTitle(selectedRecord.id, event.target.value);
               }}
             />
             <input
@@ -817,7 +879,7 @@ export default function PageViews({
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => onSelectRecord(onCreateRecord({ title: 'Новая запись', typeLabel: 'Запись', status: 'To Do' }))}
+              onClick={() => onSelectRecord(createRecordWithUniqueTitle({ title: 'Новая запись', typeLabel: 'Запись', status: 'To Do' }))}
             >
               Создать запись
             </button>
@@ -867,7 +929,7 @@ export default function PageViews({
             <input
               className="page-form-input"
               value={selectedRecord.title}
-              onChange={(event) => onUpdateRecord(selectedRecord.id, { title: event.target.value })}
+              onChange={(event) => updateRecordTitle(selectedRecord.id, event.target.value)}
             />
           </label>
           <label className="page-view-field">
@@ -923,25 +985,58 @@ export default function PageViews({
               onChange={(event) => onUpdateRecord(selectedRecord.id, { notes: event.target.value, excerpt: event.target.value })}
             />
           </label>
+          <label className="page-view-field">
+            <span>Цвет задачи</span>
+            <div className="page-gantt-color-editor">
+              <div className="page-gantt-color-presets">
+                {GANTT_COLOR_PRESETS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className={`page-gantt-color-swatch${(selectedRecord.color || '#111111') === color ? ' is-selected' : ''}`}
+                    style={{ background: color }}
+                    onClick={() => onUpdateRecord(selectedRecord.id, { color })}
+                    aria-label={`Выбрать цвет ${color}`}
+                    title={color}
+                  />
+                ))}
+              </div>
+              <label className="page-gantt-color-picker">
+                <button
+                  type="button"
+                  className="page-gantt-color-picker-trigger"
+                  onClick={openColorModal}
+                >
+                  <span
+                    className="page-gantt-color-picker-preview"
+                    style={{ background: selectedRecord.color || '#111111' }}
+                  />
+                  <span>{selectedRecord.color || '#111111'}</span>
+                </button>
+              </label>
+            </div>
+          </label>
         </div>
         <div className="page-view-side-section">
-          <div className="page-view-image-card">
-            {selectedRecord.image ? (
+          {selectedRecord.image ? (
+            <div className="page-view-image-card">
               <img src={selectedRecord.image} alt={selectedRecord.title} className="page-view-image-preview" />
-            ) : (
-              <div className="page-view-image-empty">Нет изображения</div>
-            )}
-            <div className="page-view-image-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => beginImageUpload(selectedRecord.id)}>
-                {selectedRecord.image ? 'Заменить изображение' : 'Прикрепить изображение'}
-              </button>
-              {selectedRecord.image && (
+              <div className="page-view-image-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => beginImageUpload(selectedRecord.id)}>
+                  Заменить изображение
+                </button>
                 <button type="button" className="btn btn-ghost" onClick={() => onUpdateRecord(selectedRecord.id, { image: '' })}>
                   Убрать изображение
                 </button>
-              )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="page-view-image-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => beginImageUpload(selectedRecord.id)}>
+                Прикрепить изображение
+              </button>
+            </div>
+          )}
           {selectedRecord.source === 'manual' && (
             <button type="button" className="btn btn-ghost page-view-danger" onClick={() => onDeleteRecord(selectedRecord.id)}>
               Удалить запись
@@ -988,7 +1083,13 @@ export default function PageViews({
                   className="page-form-input"
                   placeholder="Например, дизайн этапа"
                   value={ganttDraft.title}
-                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, title: event.target.value }))}
+                  onChange={(event) => {
+                    const nextTitle = event.target.value;
+                    setGanttDraft((prev) => ({ ...prev, title: nextTitle }));
+                    if (!nextTitle.trim() || !hasDuplicateTitle(nextTitle)) {
+                      setGanttDraftError('');
+                    }
+                  }}
                 />
               </label>
               <label className="page-view-field">
@@ -1032,12 +1133,55 @@ export default function PageViews({
                 />
               </label>
             </div>
+            {ganttDraftError && <div className="auth-error">{ganttDraftError}</div>}
             <div className="modal-actions">
               <button className="modal-close" onClick={() => setShowGanttCreateModal(false)}>
                 Отмена
               </button>
               <button className="modal-close" onClick={submitGanttDraft} disabled={!ganttDraft.title.trim() || !ganttDraft.startDate || !ganttDraft.endDate}>
                 Создать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showColorModal && selectedRecord && (
+        <div className="modal-overlay" onClick={() => setShowColorModal(false)}>
+          <div className="modal page-gantt-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>Цвет задачи</h3>
+            <p className="modal-note">Выберите один из базовых цветов или задайте собственный оттенок.</p>
+            <div className="page-gantt-color-modal">
+              <div className="page-gantt-color-presets">
+                {GANTT_COLOR_PRESETS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className={`page-gantt-color-swatch${customColorDraft === color ? ' is-selected' : ''}`}
+                    style={{ background: color }}
+                    onClick={() => setCustomColorDraft(color)}
+                    aria-label={`Выбрать цвет ${color}`}
+                    title={color}
+                  />
+                ))}
+              </div>
+              <label className="page-gantt-color-modal-picker">
+                <span>Свой цвет</span>
+                <div className="page-gantt-color-modal-input">
+                  <input
+                    type="color"
+                    value={customColorDraft}
+                    onChange={(event) => setCustomColorDraft(event.target.value)}
+                  />
+                  <span>{customColorDraft}</span>
+                </div>
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button className="modal-close" onClick={() => setShowColorModal(false)}>
+                Отмена
+              </button>
+              <button className="modal-close" onClick={saveCustomColor}>
+                Сохранить
               </button>
             </div>
           </div>

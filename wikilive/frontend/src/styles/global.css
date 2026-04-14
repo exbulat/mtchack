@@ -1173,7 +1173,7 @@ strong { color: var(--text); font-weight: 600; }
 .page-gantt {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1286,34 +1286,33 @@ strong { color: var(--text); font-weight: 600; }
 
 .page-gantt-row {
   display: grid;
-  gap: 12px;
-  align-items: stretch;
+  gap: 8px;
+  align-items: center;
   min-width: 0;
 }
 
 .page-gantt-label {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 3px;
   text-align: left;
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, white 8%), color-mix(in srgb, var(--bg-secondary) 86%, white 14%));
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 16px;
-  padding: 14px;
+  padding: 9px 12px;
   cursor: pointer;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+  box-shadow: none;
+  transition: border-color 140ms ease, background 140ms ease;
   position: sticky;
   left: 0;
   z-index: 3;
-  min-height: 82px;
+  min-height: 48px;
 }
 
 .page-gantt-label:hover,
 .page-gantt-label.is-selected {
-  transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--accent-border) 45%, var(--border));
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.12);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, white 4%), color-mix(in srgb, var(--bg-secondary) 90%, white 10%));
 }
 
 .page-gantt-label-badge {
@@ -1321,27 +1320,28 @@ strong { color: var(--text); font-weight: 600; }
   align-items: center;
   justify-content: center;
   width: fit-content;
-  min-height: 24px;
-  padding: 4px 10px;
+  min-height: 20px;
+  padding: 2px 9px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
-  background: color-mix(in srgb, currentColor 12%, white);
+  border: 1px solid rgba(17, 24, 39, 0.14);
+  background: rgba(255, 255, 255, 0.92);
+  color: #111827;
 }
 
 .page-gantt-label-badge.is-todo,
 .page-gantt-label-badge.is-progress,
 .page-gantt-label-badge.is-done,
 .page-gantt-label-badge.is-other {
-  color: var(--text);
+  color: #111827;
 }
 
 .page-gantt-label-title {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--text);
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.25;
 }
 
 .page-gantt-label-meta {
@@ -1356,51 +1356,79 @@ strong { color: var(--text); font-weight: 600; }
 
 .page-gantt-track {
   position: relative;
-  min-height: 82px;
-  border-radius: 18px;
-  border: 1px solid var(--border);
+  min-height: 48px;
+  border-radius: 0;
+  border: none;
   background:
     linear-gradient(90deg, rgba(15, 23, 42, 0.03) 1px, transparent 1px),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, white 8%), color-mix(in srgb, var(--bg-secondary) 82%, white 18%));
+    transparent;
   background-size: 56px 100%, 100% 100%;
   overflow: hidden;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.45);
   min-width: 0;
 }
 
 .page-gantt-bar {
   position: absolute;
-  top: 18px;
-  height: 44px;
-  border-radius: 14px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent-border) 88%, #0f172a 12%), color-mix(in srgb, var(--accent) 78%, white 22%));
+  top: 6px;
+  height: 36px;
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, white 16%, transparent), transparent 22%, transparent 78%, color-mix(in srgb, black 20%, transparent)),
+    linear-gradient(90deg, color-mix(in srgb, var(--gantt-bar-color, #111111) 88%, white 12%), color-mix(in srgb, var(--gantt-bar-color, #111111) 96%, black 4%));
+  border: 1px solid color-mix(in srgb, var(--gantt-bar-color, #111111) 60%, white 18%);
   cursor: grab;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px;
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.18);
+  padding: 0 8px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.10);
 }
 
 .page-gantt-bar.is-selected {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-border) 55%, white), 0 16px 30px rgba(15, 23, 42, 0.2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-border) 55%, white), 0 2px 10px rgba(15, 23, 42, 0.12);
 }
 
 .page-gantt-bar-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: white;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  padding: 0 6px;
+  padding: 0 4px;
 }
 
 .page-gantt-handle {
-  width: 10px;
-  height: 100%;
+  width: 14px;
+  height: calc(100% - 8px);
   cursor: ew-resize;
   flex: 0 0 auto;
+  border-radius: 999px;
+  background: color-mix(in srgb, white 24%, transparent);
+  border: 1px solid color-mix(in srgb, white 32%, transparent);
+  margin: 4px 0;
+  position: relative;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.page-gantt-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  background: rgba(255,255,255,0.72);
+  box-shadow: -3px 0 0 rgba(255,255,255,0.72), 3px 0 0 rgba(255,255,255,0.72);
+}
+
+.page-gantt-bar:hover .page-gantt-handle,
+.page-gantt-bar:focus-within .page-gantt-handle {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .page-gantt-toolbar {
@@ -1432,6 +1460,101 @@ strong { color: var(--text); font-weight: 600; }
   left: 0;
   z-index: 2;
   min-height: 82px;
+}
+
+.page-gantt-color-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.page-gantt-color-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.page-gantt-color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--border) 85%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2);
+}
+
+.page-gantt-color-swatch.is-selected {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-border) 45%, transparent);
+}
+
+.page-gantt-color-picker {
+  display: block;
+}
+
+.page-gantt-color-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface) 28%);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.page-gantt-color-picker-preview {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+}
+
+[data-theme='light'] .page-gantt-label-badge {
+  background: #f4f5f7;
+  border-color: rgba(17, 24, 39, 0.12);
+  color: #111827;
+}
+
+.page-gantt-color-modal {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.page-gantt-color-modal-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.page-gantt-color-modal-picker > span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.page-gantt-color-modal-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  width: fit-content;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface) 28%);
+}
+
+.page-gantt-color-modal-input input {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.page-gantt-color-modal-input span {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .page-gantt-modal {
