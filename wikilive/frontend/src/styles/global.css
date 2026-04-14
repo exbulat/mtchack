@@ -1048,6 +1048,7 @@ strong { color: var(--text); font-weight: 600; }
   grid-template-columns: repeat(4, minmax(180px, 1fr));
   gap: 14px;
   overflow-x: auto;
+  margin: 10px;
   align-items: start;
   padding-bottom: 4px;
 }
@@ -3403,10 +3404,26 @@ strong { color: var(--text); font-weight: 600; }
 
 .table-embed-kanban-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 16px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.table-embed-kanban-head-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 420px;
+}
+
+.table-embed-kanban-head-note-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .table-embed-kanban-title {
@@ -3420,14 +3437,39 @@ strong { color: var(--text); font-weight: 600; }
 
 .table-embed-kanban-note {
   font-size: 12px;
+  line-height: 1.5;
   color: var(--text-muted);
-  text-align: right;
+  text-align: left;
+  max-width: 760px;
 }
 
 .table-embed-kanban-toolbar {
   display: flex;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 18px;
+  margin-left: 10px;
+}
+
+.table-embed-kanban-dismiss {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.14s ease, border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.table-embed-kanban-dismiss:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface) 92%);
 }
 
 .table-embed-kanban-primary {
@@ -3620,6 +3662,7 @@ strong { color: var(--text); font-weight: 600; }
 }
 
 .table-embed-kanban-add-card {
+  min-width: 34px;
   margin-top: auto;
   min-height: 34px;
   border-radius: 10px;
@@ -3656,15 +3699,18 @@ strong { color: var(--text); font-weight: 600; }
 
 .table-embed-task-modal {
   position: relative;
-  width: min(1520px, calc(100vw - 24px));
-  height: min(860px, calc(100vh - 24px));
+  width: min(1240px, calc(100vw - 32px));
+  height: min(820px, calc(100vh - 32px));
   padding: 0;
   overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, white 8%);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.28);
 }
 
 .table-embed-task-modal-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.72fr);
+  grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.72fr);
   height: 100%;
   min-height: 0;
 }
@@ -3682,20 +3728,23 @@ strong { color: var(--text); font-weight: 600; }
   align-items: flex-start;
   justify-content: flex-start;
   gap: 12px;
-  padding: 18px 56px 18px 20px;
+  padding: 24px 64px 20px 24px;
   border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 65%, white 35%), var(--bg));
 }
 
 .table-embed-task-title-wrap {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
 .table-embed-task-modal-header h3 {
   margin: 0;
-  font-size: 20px;
+  font-size: clamp(22px, 2vw, 30px);
+  line-height: 1.15;
   color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .table-embed-task-status-pill {
@@ -3713,21 +3762,41 @@ strong { color: var(--text); font-weight: 600; }
 
 .table-embed-task-modal-close {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  top: 16px;
+  right: 16px;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+  transition: transform 0.14s ease, border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.table-embed-task-modal-close:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent-border);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%);
+}
+
+.table-embed-task-modal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .table-embed-task-modal-fields {
   display: grid;
-  gap: 18px;
-  padding: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  padding: 20px 24px 24px;
   overflow: auto;
   align-content: start;
 }
@@ -3735,9 +3804,12 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed-task-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 20px 20px;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px 24px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 82%, var(--bg-secondary) 18%);
+  flex-wrap: wrap;
 }
 
 .table-embed-task-save,
@@ -3778,6 +3850,7 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed-task-field {
   display: grid;
   gap: 8px;
+  align-content: start;
 }
 
 .table-embed-task-field > span {
@@ -3789,12 +3862,12 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed-task-input,
 .table-embed-task-readonly {
   width: 100%;
-  min-height: 44px;
-  border-radius: 10px;
+  min-height: 48px;
+  border-radius: 12px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   color: var(--text);
-  padding: 10px 12px;
+  padding: 12px 14px;
   font-size: 14px;
 }
 
@@ -3822,7 +3895,7 @@ strong { color: var(--text); font-weight: 600; }
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: 18px 16px 12px;
+  padding: 24px 20px 14px;
   border-bottom: 1px solid var(--border);
   color: var(--text);
   background: color-mix(in srgb, var(--bg-secondary) 92%, white 8%);
@@ -3831,7 +3904,7 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed-task-history-list {
   display: grid;
   gap: 12px;
-  padding: 16px;
+  padding: 18px 20px 20px;
   overflow: auto;
 }
 
@@ -3877,19 +3950,19 @@ strong { color: var(--text); font-weight: 600; }
 }
 
 .table-embed-task-history-empty {
-  padding: 18px 16px;
+  padding: 20px;
   color: var(--text-muted);
   font-size: 13px;
 }
 
 @media (max-width: 1280px) {
   .table-embed-task-modal {
-    width: min(1320px, calc(100vw - 16px));
-    height: min(820px, calc(100vh - 16px));
+    width: min(1120px, calc(100vw - 20px));
+    height: min(780px, calc(100vh - 20px));
   }
 
   .table-embed-task-modal-shell {
-    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-columns: minmax(0, 1fr) 300px;
   }
 }
 
@@ -3900,16 +3973,43 @@ strong { color: var(--text); font-weight: 600; }
   }
 
   .table-embed-task-modal-shell {
-    grid-template-columns: minmax(220px, 0.92fr) minmax(220px, 1.08fr);
+    grid-template-columns: 1fr;
+  }
+
+  .table-embed-task-history {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    max-height: 280px;
+  }
+
+  .table-embed-task-modal-fields {
+    grid-template-columns: 1fr;
+    padding: 18px 18px 20px;
   }
 
   .table-embed-task-actions {
-    flex-direction: column;
-    align-items: stretch;
+    padding: 14px 18px 18px;
+    justify-content: stretch;
   }
 
+  .table-embed-task-save,
   .table-embed-task-delete {
-    margin-left: 0;
+    width: 100%;
+  }
+
+  .table-embed-kanban-head {
+    gap: 12px;
+  }
+
+  .table-embed-kanban-toolbar {
+    width: 100%;
+    margin-left: 10px;
+    margin-bottom: 14px;
+  }
+
+  .table-embed-kanban-primary {
+    width: 100%;
+    min-height: 38px;
   }
 }
 

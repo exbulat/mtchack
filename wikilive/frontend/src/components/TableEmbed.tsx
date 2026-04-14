@@ -1055,10 +1055,21 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     }
 
     return (
-      <div className="table-embed-kanban-view">
+      <><div className="table-embed-kanban-view">
         <div className="table-embed-kanban-head">
-          <span className="table-embed-kanban-title">KANBAN</span>
-          <span className="table-embed-kanban-note">Перетаскивайте карточки между колонками и редактируйте их справа</span>
+          <div className="table-embed-kanban-head-main">
+            <span className="table-embed-kanban-title">KANBAN</span>
+            <span className="table-embed-kanban-note">Перетаскивайте карточки между колонками и редактируйте их справа</span>
+            <button type="button"
+              className="table-embed-kanban-dismiss"
+              onClick={onRemove}
+              aria-label="Remove kanban board"
+              title="Remove kanban board"
+            >
+            &times;
+            </button>
+          </div>
+        </div>
         </div>
         <div className="table-embed-kanban-toolbar">
           <button
@@ -1069,8 +1080,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
           >
             {addingKanbanColumn ? 'Creating...' : 'New task'}
           </button>
-        </div>
-        <div className="page-kanban table-embed-kanban-board">
+        </div><div className="page-kanban table-embed-kanban-board">
           {Array.from(grouped.entries()).map(([group, items]) => {
             const toneClass = getKanbanToneClass(group);
             const optionStyle = getKanbanOptionStyle(group);
@@ -1081,25 +1091,24 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                 onDragOver={(event) => {
                   event.preventDefault();
                   event.dataTransfer.dropEffect = 'move';
-                }}
+                } }
                 onDrop={() => {
                   if (!draggedKanbanRecordId) return;
-                void updateCell(draggedKanbanRecordId, statusFieldId, group === 'No status' ? '' : group, true, 'moved');
-                setDraggedKanbanRecordId(null);
-              }}
+                  void updateCell(draggedKanbanRecordId, statusFieldId, group === 'No status' ? '' : group, true, 'moved');
+                  setDraggedKanbanRecordId(null);
+                } }
                 style={optionStyle?.borderColor ? { borderTop: `3px solid ${optionStyle.borderColor}` } : undefined}
-            >
-              <header className={`page-kanban-col-header is-${toneClass} table-embed-kanban-col-header`}>
-                <div className="page-kanban-col-title-wrap table-embed-kanban-col-title-wrap">
-                  <span
-                    className={`page-kanban-col-dot is-${toneClass} table-embed-kanban-col-dot is-${toneClass}`}
-                    style={{ background: optionStyle?.borderColor || optionStyle?.color }}
-                  />
-                  <span className="table-embed-kanban-col-title">{group}</span>
-                </div>
-                <span className="page-kanban-col-count table-embed-kanban-col-count">{items.length}</span>
-              </header>
-              <div className="table-embed-kanban-col-body">
+              >
+                <header className={`page-kanban-col-header is-${toneClass} table-embed-kanban-col-header`}>
+                  <div className="page-kanban-col-title-wrap table-embed-kanban-col-title-wrap">
+                    <span
+                      className={`page-kanban-col-dot is-${toneClass} table-embed-kanban-col-dot is-${toneClass}`}
+                      style={{ background: optionStyle?.borderColor || optionStyle?.color }} />
+                    <span className="table-embed-kanban-col-title">{group}</span>
+                  </div>
+                  <span className="page-kanban-col-count table-embed-kanban-col-count">{items.length}</span>
+                </header>
+                <div className="table-embed-kanban-col-body">
                   {items.length > 0 ? items.map((record) => {
                     const recordId = record.recordId || record.id || '';
                     const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Record ${recordId}`;
@@ -1147,8 +1156,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
               <span>Новая группа</span>
             </button>
           </section>
-        </div>
-      </div>
+        </div></>
     );
   };
 
@@ -1203,7 +1211,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
             onClick={() => setActiveKanbanRecordId(null)}
             aria-label="Закрыть"
           >
-            x
+            &times;
           </button>
           <div className="table-embed-task-modal-shell">
             <div className="table-embed-task-modal-main">
@@ -1215,7 +1223,8 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                   </span>
                 </div>
               </div>
-            <div className="table-embed-task-modal-fields">
+              <div className="table-embed-task-modal-body">
+                <div className="table-embed-task-modal-fields">
               {normalizedFields.map((field) => {
                 const displayValue = kanbanTaskDraft[field.id] ?? '';
                 const isStatusField = field.id === statusFieldId;
@@ -1278,8 +1287,9 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
               >
                 {canDeleteTask ? 'Удалить задачу' : 'Удаление...'}
               </button>
+                </div>
+              </div>
             </div>
-          </div>
           <aside className="table-embed-task-history">
             <div className="table-embed-task-history-head">
               <strong>История</strong>
