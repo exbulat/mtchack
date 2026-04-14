@@ -25,11 +25,11 @@ function validatePrompt(prompt: unknown): string | null {
 }
 
 function getAiContextMode(): AiContextMode {
-  const rawMode = (process.env.AI_CONTEXT_MODE || 'disabled').trim().toLowerCase();
+  const rawMode = (process.env.AI_CONTEXT_MODE || 'redact').trim().toLowerCase();
   if (rawMode === 'allow' || rawMode === 'redact') {
     return rawMode;
   }
-  return 'disabled';
+  return 'redact';
 }
 
 function redactSensitiveContent(input: string): string {
@@ -75,7 +75,7 @@ router.post('/chat', async (req: Request, res: Response) => {
       {
         role: 'system',
         content:
-          'РўС‹ вЂ” AI-РїРѕРјРѕС‰РЅРёРє РІ РІРёРєРё-СЂРµРґР°РєС‚РѕСЂРµ WikiLive. РџРѕРјРѕРіР°Р№ РїРёСЃР°С‚СЊ Рё СЂРµРґР°РєС‚РёСЂРѕРІР°С‚СЊ С‚РµРєСЃС‚. РћС‚РІРµС‡Р°Р№ РЅР° СЂСѓСЃСЃРєРѕРј СЏР·С‹РєРµ. Р‘СѓРґСЊ РєСЂР°С‚РєРёРј Рё РїРѕР»РµР·РЅС‹Рј.',
+          'Ты агент-помощник WikiLive. Работай по содержимому текущей и связанных страниц из контекста, явно учитывай факты из них и отвечай на русском языке. Если данных недостаточно, скажи об этом прямо и предложи следующий шаг.',
       },
       ...(validatedContext
         ? [{ role: 'user' as const, content: `РљРѕРЅС‚РµРєСЃС‚ С‚РµРєСѓС‰РµР№ СЃС‚СЂР°РЅРёС†С‹:\n${validatedContext}` }]
@@ -98,13 +98,19 @@ router.post('/chat', async (req: Request, res: Response) => {
     });
 
     if (!resp.ok) {
-      await resp.text();
-      console.error('[AI] MWS GPT error:', resp.status);
-      return res.status(resp.status).json({ error: 'AI service error' });
+      const providerError = (await resp.text()).trim();
+      console.error('[AI] MWS GPT error:', resp.status, providerError || '(empty body)');
+      return res.status(resp.status).json({
+        error: providerError || `AI service error (HTTP ${resp.status})`,
+      });
     }
 
     const data = (await resp.json()) as GptResponse;
     const reply = data.choices?.[0]?.message?.content || '';
+    if (!reply.trim()) {
+      console.error('[AI] Empty reply from provider');
+      return res.status(502).json({ error: 'AI returned an empty response' });
+    }
     res.json({ reply });
   } catch (err) {
     console.error('[AI] Request failed:', err instanceof Error ? err.message : 'Unknown error');
@@ -156,12 +162,19 @@ router.post('/suggest', async (req: Request, res: Response) => {
     });
 
     if (!resp.ok) {
-      console.error('[AI] MWS GPT suggest error:', resp.status);
-      return res.status(resp.status).json({ error: 'AI service error' });
+      const providerError = (await resp.text()).trim();
+      console.error('[AI] MWS GPT suggest error:', resp.status, providerError || '(empty body)');
+      return res.status(resp.status).json({
+        error: providerError || `AI service error (HTTP ${resp.status})`,
+      });
     }
 
     const data = (await resp.json()) as GptResponse;
     const reply = data.choices?.[0]?.message?.content || '';
+    if (!reply.trim()) {
+      console.error('[AI] Empty suggest reply from provider');
+      return res.status(502).json({ error: 'AI returned an empty response' });
+    }
     res.json({ reply });
   } catch (err) {
     console.error('[AI] Suggest request failed:', err instanceof Error ? err.message : 'Unknown error');

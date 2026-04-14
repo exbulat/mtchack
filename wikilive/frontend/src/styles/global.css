@@ -3014,6 +3014,11 @@ strong { color: var(--text); font-weight: 600; }
   overflow: hidden;
 }
 
+.ai-floating-panel.is-dragging,
+.ai-floating-panel.is-dragging * {
+  user-select: none;
+}
+
 .ai-floating-header {
   display: flex;
   align-items: center;
@@ -3026,6 +3031,11 @@ strong { color: var(--text); font-weight: 600; }
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-secondary);
+  cursor: grab;
+}
+
+.ai-floating-panel.is-dragging .ai-floating-header {
+  cursor: grabbing;
 }
 
 .ai-floating-close {

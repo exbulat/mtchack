@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
@@ -224,9 +224,10 @@ export default function PageEditor() {
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiMode, setAiMode] = useState<'page' | 'search'>('page');
   const [aiResult, setAiResult] = useState('');
-  const [aiShareContext, setAiShareContext] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [aiPanelPosition, setAiPanelPosition] = useState<{ x: number; y: number } | null>(null);
+  const [aiDragging, setAiDragging] = useState(false);
   const [description, setDescription] = useState('');
   const [showComments, setShowComments] = useState(false);
   const [canvasCommentMode, setCanvasCommentMode] = useState(false);
@@ -258,6 +259,9 @@ export default function PageEditor() {
   const newPageCreateTimeoutRef = useRef<number | null>(null);
   const creatingPageRef = useRef(false);
   const viewsMenuRef = useRef<HTMLDivElement | null>(null);
+  const aiPanelRef = useRef<HTMLDivElement | null>(null);
+  const aiDragOffsetRef = useRef({ x: 0, y: 0 });
+  const aiDraggingRef = useRef(false);
   const [recordOverrides, setRecordOverrides] = useState<Record<string, Partial<ViewRecord>>>({});
   const [manualViewRecords, setManualViewRecords] = useState<ViewRecord[]>([]);
   const [selectedViewRecordId, setSelectedViewRecordId] = useState<string | null>(null);
@@ -730,48 +734,169 @@ export default function PageEditor() {
     setShowAiPanel(true);
   };
 
+  const clampAiPanelPosition = useCallback((x: number, y: number) => {
+    const panel = aiPanelRef.current;
+    const panelWidth = panel?.offsetWidth || 380;
+    const panelHeight = panel?.offsetHeight || 420;
+    const minOffset = 8;
+    const maxX = Math.max(minOffset, window.innerWidth - panelWidth - minOffset);
+    const maxY = Math.max(minOffset, window.innerHeight - panelHeight - minOffset);
+    return {
+      x: Math.min(Math.max(minOffset, x), maxX),
+      y: Math.min(Math.max(minOffset, y), maxY),
+    };
+  }, []);
+
+  const startAiPanelDrag = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest('.ai-floating-close')) return;
+    const panel = aiPanelRef.current;
+    if (!panel) return;
+
+    const rect = panel.getBoundingClientRect();
+    const currentPos = aiPanelPosition ?? { x: rect.left, y: rect.top };
+    if (!aiPanelPosition) {
+      setAiPanelPosition(currentPos);
+    }
+
+    aiDragOffsetRef.current = {
+      x: event.clientX - currentPos.x,
+      y: event.clientY - currentPos.y,
+    };
+    aiDraggingRef.current = true;
+    setAiDragging(true);
+    event.preventDefault();
+  }, [aiPanelPosition]);
+
+  useEffect(() => {
+    if (!showAiPanel) return;
+
+    const onMouseMove = (event: MouseEvent) => {
+      if (!aiDraggingRef.current) return;
+      const nextPosition = clampAiPanelPosition(
+        event.clientX - aiDragOffsetRef.current.x,
+        event.clientY - aiDragOffsetRef.current.y,
+      );
+      setAiPanelPosition(nextPosition);
+    };
+
+    const onMouseUp = () => {
+      if (!aiDraggingRef.current) return;
+      aiDraggingRef.current = false;
+      setAiDragging(false);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [clampAiPanelPosition, showAiPanel]);
+
+  useEffect(() => {
+    if (!showAiPanel || !aiPanelPosition) return;
+
+    const onResize = () => {
+      setAiPanelPosition((prev) => {
+        if (!prev) return prev;
+        return clampAiPanelPosition(prev.x, prev.y);
+      });
+    };
+
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [aiPanelPosition, clampAiPanelPosition, showAiPanel]);
+
+  useEffect(() => {
+    if (showAiPanel) return;
+    aiDraggingRef.current = false;
+    setAiDragging(false);
+  }, [showAiPanel]);
+
   const runAi = async () => {
     if (!aiPrompt.trim()) return;
     setAiLoading(true);
     setAiResult('');
+    setAiError('');
     try {
-      let contextForAi = '';
-      if (aiShareContext && aiMode === 'search') {
-        try {
-          const found = await api.searchPages(aiPrompt, spaceId ?? null);
-          const pages = await Promise.all(
-            found.slice(0, 3).map((p) => api.getPage(p.id).catch(() => null))
-          );
-          contextForAi = pages
-            .filter(Boolean)
-            .map((p) => `=== ${p!.title} ===\n${extractText(p!.content as JSONContent)}`)
-            .join('\n\n');
-        } catch { /* ignore, use empty context */ }
-      } else if (aiShareContext) {
-        const text = extractText(content);
-        contextForAi = `Файл: ${title}\nОписание: ${description || '-'}\nТекст файла:\n${text}`;
-      }
+      const contextParts: string[] = [];
+      const liveDoc = editorInstance?.getJSON() as JSONContent | undefined;
+      const currentPageText = extractText(liveDoc || content).slice(0, 4_000);
+      const currentPageContext =
+        'Current page:\n' +
+        'Title: ' + title + '\n' +
+        'Description: ' + (description || '-') + '\n' +
+        'Content:\n' + currentPageText;
+      contextParts.push(currentPageContext);
 
-      const res = await api.aiChat(aiPrompt, contextForAi, aiShareContext);
-      if (!res.reply) return;
+      try {
+        const quotedMatches = Array.from(aiPrompt.matchAll(/["«](.+?)["»]/g))
+          .map((match) => match[1]?.trim())
+          .filter((value): value is string => Boolean(value && value.length > 0));
+        const basePrompt = aiPrompt.trim();
+        const searchQueries = Array.from(
+          new Set([basePrompt, ...quotedMatches].filter((value) => value.length > 0))
+        );
 
-      if (aiMode === 'search') {
-        setAiResult(res.reply);
-      } else {
-        if (editorInstance) {
-          editorInstance.chain().focus().insertContent(res.reply).run();
-        } else {
-          setContent((prev: JSONContent) => ({
-            ...prev,
-            content: [
-              ...(prev.content || []),
-              { type: 'paragraph', content: [{ type: 'text', text: res.reply }] },
-            ],
-          }));
+        const searchBuckets = await Promise.all(
+          searchQueries.map((query) => api.searchPages(query, spaceId ?? null).catch(() => []))
+        );
+        const mergedSearch = searchBuckets.flat();
+        const dedupedById = new Map(mergedSearch.map((page) => [page.id, page]));
+        let relatedPages = Array.from(dedupedById.values()).filter((page) => page.id !== pageId);
+
+        if (relatedPages.length === 0 && quotedMatches.length > 0) {
+          const allPages = await api.listPages().catch(() => []);
+          const byTitle = allPages.filter((page) => {
+            const normalized = page.title.trim().toLowerCase();
+            return quotedMatches.some((quoted) => normalized === quoted.trim().toLowerCase());
+          });
+          relatedPages = byTitle.filter((page) => page.id !== pageId);
         }
-        setAiPrompt('');
+        relatedPages = relatedPages.slice(0, 5);
+
+        if (relatedPages.length > 0) {
+          const list = relatedPages.map((page) => '- ' + page.title).join('\n');
+          contextParts.push('Relevant pages:\n' + list);
+        }
+
+        if (relatedPages.length > 0) {
+          const pages = await Promise.all(
+            relatedPages.slice(0, 3).map((page) => api.getPage(page.id).catch(() => null))
+          );
+          const detailed = pages
+            .filter(Boolean)
+            .map((page) => '=== ' + page!.title + ' ===\n' + extractText(page!.content as JSONContent).slice(0, 1_800))
+            .join('\n\n');
+          if (detailed) {
+            contextParts.push('Related page excerpts:\n' + detailed);
+          }
+        }
+      } catch {
+        /* ignore search context and continue without it */
       }
-    } catch { /* ignore */ } finally {
+
+      const contextForAi = contextParts.join('\n\n').slice(0, 9_500);
+      const includeContext = contextForAi.trim().length > 0;
+      let res: { reply: string };
+      try {
+        res = await api.aiChat(aiPrompt, contextForAi, includeContext);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (includeContext && message.includes('disabled by server policy')) {
+          res = await api.aiChat(aiPrompt, '', false);
+        } else {
+          throw error;
+        }
+      }
+
+      if (!res.reply) return;
+      setAiResult(res.reply);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI-запрос завершился с ошибкой';
+      setAiError(message || 'AI-запрос завершился с ошибкой');
+    } finally {
       setAiLoading(false);
     }
   };
@@ -1523,59 +1648,46 @@ export default function PageEditor() {
       )}
 
       {showAiPanel && (
-        <div className="ai-floating-panel">
-          <div className="ai-floating-header">
+        <div
+          ref={aiPanelRef}
+          className={`ai-floating-panel${aiDragging ? ' is-dragging' : ''}`}
+          style={
+            aiPanelPosition
+              ? {
+                  left: `${aiPanelPosition.x}px`,
+                  top: `${aiPanelPosition.y}px`,
+                  right: 'auto',
+                  bottom: 'auto',
+                }
+              : undefined
+          }
+        >
+          <div className="ai-floating-header" onMouseDown={startAiPanelDrag}>
             <span>AI-помощник</span>
             <button className="ai-floating-close" onClick={() => setShowAiPanel(false)}>x</button>
           </div>
           <div className="ai-floating-body">
-            {/* AI mode switcher */}
-            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-              <button
-                className={`toolbar-btn${aiMode === 'page' ? ' active' : ''}`}
-                style={{ flex: 1, height: 30, fontSize: 12 }}
-                onClick={() => { setAiMode('page'); setAiResult(''); }}
-              >
-                Этот файл
-              </button>
-              <button
-                className={`toolbar-btn${aiMode === 'search' ? ' active' : ''}`}
-                style={{ flex: 1, height: 30, fontSize: 12 }}
-                onClick={() => { setAiMode('search'); setAiResult(''); }}
-              >
-                Поиск по всем
-              </button>
-            </div>
             <textarea
               className="ai-block-input"
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder={
-                aiMode === 'search'
-                  ? 'Например: найди где описана интеграция с MWS Tables'
-                  : 'Введите промпт для работы с этим файлом...'
-              }
+              placeholder="Например: найди где описана интеграция с MWS Tables"
               disabled={aiLoading}
             />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
-              <input
-                type="checkbox"
-                checked={aiShareContext}
-                onChange={(e) => setAiShareContext(e.target.checked)}
-                disabled={aiLoading}
-              />
-              Отправлять контекст страницы в AI
-            </label>
             <div className="ai-block-actions">
               {aiLoading ? (
                 <span className="ai-loading-text">Генерация...</span>
               ) : (
                 <button className="btn btn-primary" onClick={runAi}>
-                  {aiMode === 'search' ? 'Найти' : 'Выполнить'}
+                  Спросить
                 </button>
               )}
             </div>
-            {/* AI response */}
+            {aiError && (
+              <div className="ai-block-result" style={{ color: 'var(--danger)', marginTop: 10 }}>
+                {aiError}
+              </div>
+            )}
             {aiResult && (
               <div style={{
                 marginTop: 10,
