@@ -48,10 +48,15 @@ type KanbanHistoryEntry = {
 const PAGE_SIZE = 50;
 const LIVE_POLL_INTERVAL_MS = 20_000;
 const KANBAN_HISTORY_KEY_PREFIX = 'wikilive-mws-kanban-history:';
+const CREATE_OPTION_VALUE = '__create_new_option__';
 const EDITABLE_FIELD_TYPE_HINTS = new Set([
   'text',
   'singletext',
   'single_text',
+  'select',
+  'single_select',
+  'multiselect',
+  'multi_select',
   'string',
   'number',
   'integer',
@@ -78,9 +83,6 @@ const READONLY_FIELD_TYPE_HINTS = new Set([
   'linked_record',
   'member',
   'user',
-  'select',
-  'multiselect',
-  'multi_select',
   'rating',
   'createdtime',
   'created_time',
@@ -120,6 +122,11 @@ function normalizeFieldId(field: MwsField): string {
 
 function normalizeFieldName(field: MwsField): string {
   return String(field.name || field.fieldName || field.id || '');
+}
+
+function isOptionFieldCandidate(field: { id: string; name: string }): boolean {
+  const source = `${field.id} ${field.name}`.toLowerCase();
+  return source.includes('option') || source.includes('опци');
 }
 
 function getFieldTypeHint(field: MwsField): string | null {
@@ -202,6 +209,82 @@ function extractFieldOptions(field: MwsField | undefined): string[] {
   }
 
   return Array.from(values);
+}
+
+type FieldOptionMeta = {
+  label: string;
+  id?: string;
+  raw: unknown;
+};
+
+function extractFieldOptionMetas(field: MwsField | undefined): FieldOptionMeta[] {
+  if (!field) return [];
+
+  const property = field.property as Record<string, unknown> | undefined;
+  const candidates = [field.options, property?.options, property?.selectOptions];
+  const metas: FieldOptionMeta[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    for (const option of candidate) {
+      if (typeof option === 'string') {
+        const label = option.trim();
+        if (!label) continue;
+        const key = `label:${label.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        metas.push({ label, raw: option });
+        continue;
+      }
+      if (!option || typeof option !== 'object' || Array.isArray(option)) continue;
+      const record = option as Record<string, unknown>;
+      const label = String(
+        record.name ?? record.label ?? record.title ?? record.value ?? record.text ?? ''
+      ).trim();
+      if (!label) continue;
+      const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : undefined;
+      const key = `${id || 'label'}:${(id || label).toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      metas.push({ label, id, raw: option });
+    }
+  }
+
+  return metas;
+}
+
+function buildFieldUpdateCandidates(field: { typeHint: string | null; raw: MwsField }, value: string): unknown[] {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return [''];
+
+  const isSelectTypeField = (field.typeHint || '').includes('select');
+  if (!isSelectTypeField) return [trimmedValue];
+
+  const isMultiSelect = (field.typeHint || '').includes('multi');
+  const optionMetas = extractFieldOptionMetas(field.raw);
+  const matched = optionMetas.find((option) => option.label.toLowerCase() === trimmedValue.toLowerCase());
+  const scalarCandidates: unknown[] = [trimmedValue];
+
+  if (matched?.id) {
+    scalarCandidates.push(matched.id);
+    scalarCandidates.push({ id: matched.id });
+    scalarCandidates.push({ id: matched.id, name: matched.label });
+  }
+  if (matched?.raw && typeof matched.raw === 'object' && !Array.isArray(matched.raw)) {
+    scalarCandidates.push(matched.raw);
+  }
+
+  const wrapped = isMultiSelect
+    ? scalarCandidates.flatMap((candidate) => [candidate, [candidate]])
+    : scalarCandidates;
+
+  const unique = new Map<string, unknown>();
+  for (const candidate of wrapped) {
+    const key = typeof candidate === 'string' ? `s:${candidate}` : `j:${JSON.stringify(candidate)}`;
+    if (!unique.has(key)) unique.set(key, candidate);
+  }
+  return Array.from(unique.values());
 }
 
 function sanitizeColor(raw: unknown): string | undefined {
@@ -474,6 +557,9 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   const [activeKanbanRecordId, setActiveKanbanRecordId] = useState<string | null>(null);
   const [kanbanHistory, setKanbanHistory] = useState<KanbanHistoryEntry[]>([]);
   const [kanbanTaskDraft, setKanbanTaskDraft] = useState<Record<string, string>>({});
+  const [kanbanCustomFieldOptions, setKanbanCustomFieldOptions] = useState<Record<string, string[]>>({});
+  const [kanbanCreatingOptionFields, setKanbanCreatingOptionFields] = useState<Record<string, boolean>>({});
+  const [kanbanSavingOptionFields, setKanbanSavingOptionFields] = useState<Record<string, boolean>>({});
   const [savingTaskModal, setSavingTaskModal] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthKey());
@@ -607,6 +693,12 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     setKanbanTaskDraft(nextDraft);
   }, [activeKanbanRecord, normalizedFields]);
 
+  useEffect(() => {
+    setKanbanCustomFieldOptions({});
+    setKanbanCreatingOptionFields({});
+    setKanbanSavingOptionFields({});
+  }, [dstId, viewId]);
+
   const filteredRecords = useMemo(() => {
     let result = records.slice(0, PAGE_SIZE * page);
     if (filterText.trim()) {
@@ -641,16 +733,41 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     const cellKey = `${recordId}:${fieldId}`;
     setSavingCells((prev) => new Set(prev).add(cellKey));
     try {
-      await api.updateRecords(dstId, {
-        records: [{ recordId, fields: { [fieldId]: value } }],
-      });
-      setRecords((prev) =>
-        prev.map((r) =>
-          (r.recordId || r.id) === recordId
-            ? { ...r, fields: { ...(r.fields || {}), [fieldId]: value } }
-            : r
-        )
-      );
+      const updateCandidates = buildFieldUpdateCandidates(targetField, value);
+      let persistedRecords: MwsRecord[] | null = null;
+      let updateAccepted = false;
+
+      for (const candidateValue of updateCandidates) {
+        await api.updateRecords(dstId, {
+          records: [{ recordId, fields: { [fieldId]: candidateValue } }],
+        });
+
+        const latestRecordsResponse = await api.getRecords(dstId, Math.max(PAGE_SIZE * page, 100), viewId);
+        const latestRecords = (latestRecordsResponse?.data?.records || latestRecordsResponse?.records || []) as MwsRecord[];
+        const latestRecord = latestRecords.find((record) => (record.recordId || record.id || '') === recordId);
+        const persistedValue = mwsCellDisplayValue((latestRecord?.fields || {})[fieldId]).trim();
+        if (persistedValue.toLowerCase() === value.trim().toLowerCase()) {
+          persistedRecords = latestRecords;
+          updateAccepted = true;
+          break;
+        }
+      }
+
+      if (!updateAccepted) {
+        throw new Error('MWS did not persist updated value');
+      }
+
+      if (persistedRecords) {
+        setRecords(persistedRecords);
+      } else {
+        setRecords((prev) =>
+          prev.map((r) =>
+            (r.recordId || r.id) === recordId
+              ? { ...r, fields: { ...(r.fields || {}), [fieldId]: value } }
+              : r
+          )
+        );
+      }
       setLastLoadedAt(Date.now());
       appendKanbanHistory({
         action: historyAction,
@@ -899,10 +1016,15 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
     for (const field of normalizedFields) {
       const values = new Set<string>(extractFieldOptions(field.raw));
+      const isOptionField = isOptionFieldCandidate(field);
+      const isSelectTypeField = (field.typeHint || '').includes('select');
+      const shouldCollectFromRecords = field.id === statusFieldId || isOptionField || isSelectTypeField;
 
-      for (const record of records) {
-        const value = mwsCellDisplayValue((record.fields || {})[field.id]).trim();
-        if (value) values.add(value);
+      if (shouldCollectFromRecords) {
+        for (const record of records) {
+          const value = mwsCellDisplayValue((record.fields || {})[field.id]).trim();
+          if (value) values.add(value);
+        }
       }
 
       if (field.id === statusFieldId) {
@@ -911,11 +1033,94 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         }
       }
 
+      const customOptions = kanbanCustomFieldOptions[field.id] || [];
+      for (const option of customOptions) {
+        const normalizedOption = option.trim();
+        if (normalizedOption) values.add(normalizedOption);
+      }
+
       map.set(field.id, Array.from(values));
     }
 
     return map;
-  }, [kanbanColumns, normalizedFields, records, statusFieldId]);
+  }, [kanbanColumns, kanbanCustomFieldOptions, normalizedFields, records, statusFieldId]);
+
+  const addKanbanFieldOption = useCallback(async (fieldId: string, rawValue: string) => {
+    const nextValue = rawValue.trim();
+    if (!nextValue) return false;
+
+    const knownOptions = new Set(
+      (fieldOptionSuggestions.get(fieldId) || []).map((option) => option.toLowerCase())
+    );
+    if (knownOptions.has(nextValue.toLowerCase())) return false;
+
+    const targetField = normalizedFields.find((field) => field.id === fieldId);
+    if (!targetField) return false;
+
+    const isSelectTypeField = (targetField.typeHint || '').includes('select');
+    if (isSelectTypeField) {
+      const rawField = targetField.raw as Record<string, unknown>;
+      const property = rawField.property && typeof rawField.property === 'object'
+        ? (rawField.property as Record<string, unknown>)
+        : {};
+      const rawOptionsCandidate = [
+        rawField.options,
+        property.options,
+        property.selectOptions,
+      ].find((value) => Array.isArray(value)) as unknown[] | undefined;
+      const rawOptions = Array.isArray(rawOptionsCandidate) ? rawOptionsCandidate : [];
+
+      const optionLabels = new Set<string>(
+        rawOptions
+          .map((option) => {
+            if (typeof option === 'string') return option.trim();
+            if (!option || typeof option !== 'object' || Array.isArray(option)) return '';
+            const record = option as Record<string, unknown>;
+            return String(record.name || record.label || record.title || record.value || record.text || '').trim();
+          })
+          .filter((label) => label.length > 0)
+          .map((label) => label.toLowerCase())
+      );
+      if (!optionLabels.has(nextValue.toLowerCase())) {
+        const nextOptions = rawOptions.length > 0
+          ? [...rawOptions, { name: nextValue }]
+          : [{ name: nextValue }];
+
+        setKanbanSavingOptionFields((prev) => ({ ...prev, [fieldId]: true }));
+        try {
+          await api.updateFields(dstId, {
+            fieldKey: 'id',
+            fields: [
+              {
+                id: fieldId,
+                fieldId,
+                property: {
+                  options: nextOptions,
+                },
+              },
+            ],
+          });
+          const fieldsData = await api.getFields(dstId, viewId);
+          const refreshed = (fieldsData?.data?.fields || fieldsData?.fields || []) as MwsField[];
+          if (refreshed.length > 0) {
+            setFields(refreshed);
+          }
+        } catch {
+          return false;
+        } finally {
+          setKanbanSavingOptionFields((prev) => ({ ...prev, [fieldId]: false }));
+        }
+      }
+    }
+
+    setKanbanCustomFieldOptions((prev) => ({
+      ...prev,
+      [fieldId]: [...(prev[fieldId] || []), nextValue],
+    }));
+    setKanbanTaskDraft((prev) => ({ ...prev, [fieldId]: nextValue }));
+    setKanbanCreatingOptionFields((prev) => ({ ...prev, [fieldId]: false }));
+    return true;
+  }, [dstId, fieldOptionSuggestions, normalizedFields, viewId]);
 
   function getKanbanOptionStyle(status: string): CSSProperties | undefined {
     const meta = kanbanOptionMetaByValue.get(status);
@@ -1209,7 +1414,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
             type="button"
             className="table-embed-task-modal-close"
             onClick={() => setActiveKanbanRecordId(null)}
-            aria-label="Закрыть"
+            aria-label="Close modal"
           >
             &times;
           </button>
@@ -1222,6 +1427,13 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                     {currentStatus === 'No status' ? 'Без статуса' : currentStatus}
                   </span>
                 </div>
+                <button
+                  type="button"
+                  className="table-embed-task-modal-close table-embed-task-modal-close--header"
+                  onClick={() => setActiveKanbanRecordId(null)}
+                  aria-label="Close modal"
+                  title="Close modal"
+                >&times;</button>
               </div>
               <div className="table-embed-task-modal-body">
                 <div className="table-embed-task-modal-fields">
@@ -1230,29 +1442,72 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                 const isStatusField = field.id === statusFieldId;
                 const fieldOptions = fieldOptionSuggestions.get(field.id) || [];
                 const hasSelectableOptions = fieldOptions.length > 0;
-                const dataListId = `task-field-options-${activeKanbanRecordId}-${field.id}`;
+                const isOptionField = isOptionFieldCandidate(field);
+                const isSelectTypeField = (field.typeHint || '').includes('select');
+                const supportsOptionCreation = !isStatusField && (isOptionField || isSelectTypeField);
+                const isCreatingOption = supportsOptionCreation && Boolean(kanbanCreatingOptionFields[field.id]);
+                const isSavingOption = Boolean(kanbanSavingOptionFields[field.id]);
+                const trimmedDisplayValue = displayValue.trim();
+                const optionExists = fieldOptions.some((option) => option.toLowerCase() === trimmedDisplayValue.toLowerCase());
+                const selectableOptions = optionExists || !trimmedDisplayValue ? fieldOptions : [...fieldOptions, trimmedDisplayValue];
+                const selectedOptionValue = isCreatingOption ? CREATE_OPTION_VALUE : (trimmedDisplayValue || '');
 
                 return (
                   <label key={`${activeKanbanRecordId}:${field.id}`} className="table-embed-task-field">
                     <span>{getTaskFieldLabel(field, statusFieldId)}</span>
                     {field.editable || isStatusField ? (
-                      hasSelectableOptions || isStatusField ? (
-                        <>
-                          <input
-                            className="table-embed-task-input"
-                            list={dataListId}
-                            value={displayValue}
-                            placeholder={hasSelectableOptions ? 'Выберите или введите новое значение' : 'Введите значение'}
+                      hasSelectableOptions || isStatusField || supportsOptionCreation ? (
+                        <div className="table-embed-task-option-editor">
+                          <select
+                            className="table-embed-task-input table-embed-task-select"
+                            value={selectedOptionValue}
+                            disabled={isSavingOption}
                             onChange={(event) => {
-                              setKanbanTaskDraft((prev) => ({ ...prev, [field.id]: event.target.value }));
+                              const nextValue = event.target.value;
+                              if (supportsOptionCreation && nextValue === CREATE_OPTION_VALUE) {
+                                setKanbanCreatingOptionFields((prev) => ({ ...prev, [field.id]: true }));
+                                return;
+                              }
+                              setKanbanCreatingOptionFields((prev) => ({ ...prev, [field.id]: false }));
+                              setKanbanTaskDraft((prev) => ({ ...prev, [field.id]: nextValue }));
                             }}
-                          />
-                          <datalist id={dataListId}>
-                            {fieldOptions.map((option) => (
-                              <option key={option} value={option} />
+                          >
+                            {!trimmedDisplayValue && !isCreatingOption && (
+                              <option value="">Выберите опцию</option>
+                            )}
+                            {selectableOptions.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
                             ))}
-                          </datalist>
-                        </>
+                            {supportsOptionCreation && (
+                              <option value={CREATE_OPTION_VALUE}>Создать новую опцию</option>
+                            )}
+                          </select>
+                          {isCreatingOption && (
+                            <div className="table-embed-task-option-create-row">
+                              <input
+                                className="table-embed-task-input"
+                                type="text"
+                                value={displayValue}
+                                placeholder="Введите новую опцию"
+                                onChange={(event) => {
+                                  setKanbanTaskDraft((prev) => ({ ...prev, [field.id]: event.target.value }));
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="table-embed-task-option-create"
+                                onClick={() => {
+                                  void addKanbanFieldOption(field.id, displayValue);
+                                }}
+                                disabled={!trimmedDisplayValue || optionExists || isSavingOption}
+                              >
+                              {isSavingOption ? 'Сохранение...' : 'Создать опцию'}
+                            </button>
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <input
                           className="table-embed-task-input"
@@ -1484,9 +1739,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
               onClick={onRemove}
               title="Убрать интеграцию"
               disabled={loading}
-            >
-              ×
-            </button>
+            >&times;</button>
           )}
           <button
             className="table-embed-btn table-embed-btn--add"
@@ -1578,9 +1831,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                       setNewRowValues({});
                     }}
                     title="Отмена"
-                  >
-                    ×
-                  </button>
+                  >&times;</button>
                 </td>
               </tr>
             )}
@@ -1683,3 +1934,4 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     </div>
   );
 }
+

@@ -240,6 +240,12 @@ export const api = {
   getFields: (dstId: string, viewId?: string | null) =>
     request<MwsFieldsResponse>(`/tables/datasheets/${dstId}/fields${viewId ? `?viewId=${encodeURIComponent(viewId)}` : ''}`),
 
+  updateFields: (dstId: string, body: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/tables/datasheets/${dstId}/fields`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
   getViews: (dstId: string) => request<MwsViewsResponse>(`/tables/datasheets/${dstId}/views`),
 
   createDatasheet: (spaceId: string, body: Record<string, unknown>) =>

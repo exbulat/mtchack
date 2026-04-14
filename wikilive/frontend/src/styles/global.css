@@ -2402,7 +2402,7 @@ strong { color: var(--text); font-weight: 600; }
   border-radius: var(--radius-lg);
   padding: 28px;
   min-width: 420px;
-  max-width: 520px;
+  max-width: 85%;
   max-height: 70vh;
   overflow-y: auto;
   box-shadow: 0 32px 80px rgba(0,0,0,0.6);
@@ -3400,6 +3400,7 @@ strong { color: var(--text); font-weight: 600; }
 
 .table-embed-kanban-view {
   padding: 18px;
+  position: relative;
 }
 
 .table-embed-kanban-head {
@@ -3416,6 +3417,7 @@ strong { color: var(--text); font-weight: 600; }
   gap: 8px;
   min-width: 0;
   flex: 1 1 420px;
+  padding-right: 44px;
 }
 
 .table-embed-kanban-head-note-row {
@@ -3451,6 +3453,9 @@ strong { color: var(--text); font-weight: 600; }
 }
 
 .table-embed-kanban-dismiss {
+  position: absolute;
+  top: 18px;
+  right: 18px;
   width: 30px;
   height: 30px;
   border-radius: 999px;
@@ -3726,7 +3731,7 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed-task-modal-header {
   display: flex;
   align-items: flex-start;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: 12px;
   padding: 24px 64px 20px 24px;
   border-bottom: 1px solid var(--border);
@@ -3760,29 +3765,40 @@ strong { color: var(--text); font-weight: 600; }
   font-weight: 600;
 }
 
+.table-embed-task-modal > .table-embed-task-modal-close {
+  display: none;
+}
+
 .table-embed-task-modal-close {
   position: absolute;
-  top: 16px;
-  right: 16px;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
+  top: 24px;
+  right: 24px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
   display: inline-grid;
   place-items: center;
   transition: transform 0.14s ease, border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
 }
 
+.table-embed-task-modal-close--header {
+  position: static;
+  flex: 0 0 auto;
+  margin-left: auto;
+  z-index: 1;
+}
+
 .table-embed-task-modal-close:hover {
   transform: translateY(-1px);
-  border-color: var(--accent-border);
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%);
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface) 92%);
 }
 
 .table-embed-task-modal-body {
@@ -3859,6 +3875,16 @@ strong { color: var(--text); font-weight: 600; }
   color: var(--text-secondary);
 }
 
+.table-embed-task-option-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.table-embed-task-option-create-row {
+  display: grid;
+  gap: 8px;
+}
+
 .table-embed-task-input,
 .table-embed-task-readonly {
   width: 100%;
@@ -3871,6 +3897,19 @@ strong { color: var(--text); font-weight: 600; }
   font-size: 14px;
 }
 
+.table-embed-task-select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(50% - 2px),
+    calc(100% - 12px) calc(50% - 2px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+
 .table-embed-task-input:focus {
   outline: none;
   border-color: var(--accent-border);
@@ -3880,6 +3919,32 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed-task-readonly {
   display: flex;
   align-items: center;
+}
+
+.table-embed-task-option-create {
+  width: fit-content;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px dashed var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface) 92%);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+
+.table-embed-task-option-create:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface) 86%);
+}
+
+.table-embed-task-option-create:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
 }
 
 .table-embed-task-history {
