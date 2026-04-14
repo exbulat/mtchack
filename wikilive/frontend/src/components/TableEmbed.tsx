@@ -22,12 +22,13 @@ interface TableEmbedProps {
   viewId?: string;
   viewName?: string;
   viewType?: string;
+  onRemove?: () => void;
 }
 
 type ViewMode = 'table' | 'calendar' | 'gallery' | 'kanban' | 'architecture' | 'gantt' | 'grid' | 'form';
 
 const PAGE_SIZE = 50;
-const LIVE_POLL_INTERVAL_MS = 10_000;
+const LIVE_POLL_INTERVAL_MS = 20_000;
 const EDITABLE_FIELD_TYPE_HINTS = new Set([
   'text',
   'singletext',
@@ -144,25 +145,62 @@ function canEditField(field: MwsField, records: MwsRecord[]): boolean {
 
 function normalizeViewMode(viewType?: string, viewName?: string): ViewMode {
   const source = `${viewType || ''} ${viewName || ''}`.toLowerCase();
-  if (source.includes('calendar') || source.includes('календар')) return 'calendar';
-  if (source.includes('gallery') || source.includes('галере')) return 'gallery';
+  if (source.includes('calendar') || source.includes('календарь')) return 'calendar';
+  if (source.includes('gallery') || source.includes('галерея')) return 'gallery';
   if (source.includes('kanban') || source.includes('канбан')) return 'kanban';
-  if (source.includes('architecture') || source.includes('архитектур')) return 'architecture';
-  if (source.includes('gantt') || source.includes('РіР°РЅС‚')) return 'gantt';
-  if (source.includes('grid') || source.includes('СЃРµС‚Рє')) return 'grid';
-  if (source.includes('form') || source.includes('С„РѕСЂРј')) return 'form';
+  if (source.includes('architecture') || source.includes('архитектура')) return 'architecture';
+  if (source.includes('gantt') || source.includes('гант')) return 'gantt';
+  if (source.includes('grid') || source.includes('сетка')) return 'grid';
+  if (source.includes('form') || source.includes('форм')) return 'form';
   return 'table';
 }
 
 function parseDateValue(raw: unknown): string | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const millis = raw > 10_000_000_000 ? raw : raw * 1000;
+    const parsed = new Date(millis);
+    if (!Number.isNaN(parsed.getTime())) {
+      return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+    }
+  }
   const value = mwsCellDisplayValue(raw).trim();
   if (!value) return null;
+  if (/^\d{13}$/.test(value) || /^\d{10}$/.test(value)) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      const millis = value.length === 13 ? numeric : numeric * 1000;
+      const parsed = new Date(millis);
+      if (!Number.isNaN(parsed.getTime())) {
+        return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+      }
+    }
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   const dotted = value.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
   if (dotted) {
     return `${dotted[3]}-${dotted[2]}-${dotted[1]}`;
   }
   return null;
+}
+
+function formatDateCell(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value.replace(/-/g, '/') : value;
+}
+
+function formatFieldDisplayValue(field: { typeHint: string | null; name: string }, raw: unknown): string {
+  const parsedDate = parseDateValue(raw);
+  if (
+    parsedDate &&
+    (
+      (field.typeHint || '').includes('date') ||
+      field.name.toLowerCase().includes('date') ||
+      field.name.toLowerCase().includes('дата')
+    )
+  ) {
+    return formatDateCell(parsedDate);
+  }
+
+  return mwsCellDisplayValue(raw);
 }
 
 function formatShortDate(value: string): string {
@@ -196,7 +234,7 @@ function formatMonthLabel(monthKey: string): string {
   });
 }
 
-export default function TableEmbed({ dstId, title, viewId, viewName, viewType }: TableEmbedProps) {
+export default function TableEmbed({ dstId, title, viewId, viewName, viewType, onRemove }: TableEmbedProps) {
   const [fields, setFields] = useState<MwsField[]>([]);
   const [records, setRecords] = useState<MwsRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -409,7 +447,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
           lowerName.includes('start') ||
           lowerName.includes('begin') ||
           lowerName.includes('from') ||
-          lowerName.includes('РЅР°С‡Р°Р»')
+          lowerName.includes('начал')
         );
       })?.id || dateFieldId,
     [dateFieldId, normalizedFields]
@@ -422,7 +460,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
           lowerName.includes('end') ||
           lowerName.includes('finish') ||
           lowerName.includes('due') ||
-          lowerName.includes('РєРѕРЅРµС†')
+          lowerName.includes('конец')
         );
       })?.id || dateFieldId,
     [dateFieldId, normalizedFields]
@@ -534,7 +572,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
               <div style={{ fontWeight: 700, marginBottom: 8 }}>{titleValue}</div>
               {previewFields.map((field) => (
                 <div key={`${recordId}:${field.id}`} style={{ fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
-                  {field.name}: {mwsCellDisplayValue((record.fields || {})[field.id]) || '—'}
+                      {field.name}: {formatFieldDisplayValue(field, (record.fields || {})[field.id]) || '—'}
                 </div>
               ))}
             </div>
@@ -548,7 +586,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
       {filteredRecords.map((record) => {
         const recordId = record.recordId || record.id || '';
-        const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Р—Р°РїРёСЃСЊ ${recordId}`;
+        const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`;
         return (
           <article key={recordId} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--bg)' }}>
             <div style={{ fontWeight: 700, marginBottom: 10 }}>{titleValue}</div>
@@ -558,7 +596,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
                   <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 4 }}>
                     {field.name}
                   </div>
-                  <div style={{ fontSize: 13 }}>{mwsCellDisplayValue((record.fields || {})[field.id]) || '—'}</div>
+                  <div style={{ fontSize: 13 }}>{formatFieldDisplayValue(field, (record.fields || {})[field.id]) || '—'}</div>
                 </div>
               ))}
             </div>
@@ -606,7 +644,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {normalizedFields.slice(0, 4).map((field) => (
                 <span key={`${recordId}:${field.id}`} style={{ fontSize: 11, padding: '4px 8px', borderRadius: 999, background: 'var(--surface)' }}>
-                  {field.name}: {mwsCellDisplayValue((record.fields || {})[field.id]) || '—'}
+                  {field.name}: {formatFieldDisplayValue(field, (record.fields || {})[field.id]) || '—'}
                 </span>
               ))}
             </div>
@@ -629,7 +667,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
         if (!recordId || !resolvedStartDate) return null;
         return {
           id: recordId,
-          title: mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Р—Р°РїРёСЃСЊ ${recordId}`,
+          title: mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`,
           startDate: resolvedStartDate,
           endDate: resolvedEndDate || resolvedStartDate,
         };
@@ -689,7 +727,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
         return (
           <article key={recordId} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--bg)' }}>
             <div style={{ fontWeight: 700, marginBottom: 12 }}>
-              {mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Р—Р°РїРёСЃСЊ ${recordId}`}
+              {mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`}
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
               {normalizedFields.map((field) => (
@@ -698,12 +736,12 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
                   {field.editable ? (
                     <input
                       className="table-embed-cell-input"
-                      defaultValue={mwsCellDisplayValue((record.fields || {})[field.id])}
+                      defaultValue={formatFieldDisplayValue(field, (record.fields || {})[field.id])}
                       onBlur={(e) => updateCell(recordId, field.id, e.target.value)}
                     />
                   ) : (
                     <div className="table-embed-cell-readonly" style={{ padding: '10px 12px', borderRadius: 8, background: 'var(--surface)' }}>
-                      {mwsCellDisplayValue((record.fields || {})[field.id]) || '—'}
+                      {formatFieldDisplayValue(field, (record.fields || {})[field.id]) || '—'}
                     </div>
                   )}
                 </label>
@@ -742,6 +780,16 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
           >
             {loading ? '...' : '↻'}
           </button>
+          {onRemove && (
+            <button
+              className="table-embed-btn"
+              onClick={onRemove}
+              title="Убрать интеграцию"
+              disabled={loading}
+            >
+              ×
+            </button>
+          )}
           <button
             className="table-embed-btn table-embed-btn--add"
             onClick={() => setShowNewRow((v) => !v)}
@@ -866,9 +914,9 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
                       <td key={cellKey} className={isSaving ? 'table-embed-cell--saving' : ''}>
                         {field.editable ? (
                           <input
-                            key={`${cellKey}:${mwsCellDisplayValue(rowFields[field.id])}`}
+                            key={`${cellKey}:${formatFieldDisplayValue(field, rowFields[field.id])}`}
                             className="table-embed-cell-input"
-                            defaultValue={mwsCellDisplayValue(rowFields[field.id])}
+                            defaultValue={formatFieldDisplayValue(field, rowFields[field.id])}
                             onBlur={(e) => updateCell(recordId, field.id, e.target.value)}
                             disabled={isDeleting}
                           />
@@ -877,7 +925,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType }:
                             className="table-embed-cell-readonly"
                             title={field.typeHint ? `Поле ${field.typeHint}` : 'Поле только для просмотра'}
                           >
-                            {mwsCellDisplayValue(rowFields[field.id]) || '—'}
+                            {formatFieldDisplayValue(field, rowFields[field.id]) || '—'}
                           </span>
                         )}
                       </td>

@@ -18,6 +18,12 @@ interface MwsSpacesResponse {
   [key: string]: unknown;
 }
 
+interface MwsNodesListResponse {
+  data?: { nodes?: Record<string, unknown>[] };
+  nodes?: Record<string, unknown>[];
+  [key: string]: unknown;
+}
+
 const BASE_URL = () => process.env.MWS_TABLES_BASE_URL || 'https://tables.mws.ru';
 
 const MAX_BODY_SIZE = 100_000;
@@ -105,6 +111,43 @@ function validateNumericParam(param: unknown, max: number = 1000): number | null
     if (isNaN(num) || num < 1 || num > max) return null;
     return num;
   }
+  return null;
+}
+
+async function findNodeViaSpaces(nodeId: string): Promise<Record<string, unknown> | null> {
+  const spacesResp = await fetch(`${BASE_URL()}/fusion/v1/spaces`, {
+    headers: getMwsHeaders(),
+  });
+  if (!spacesResp.ok) return null;
+
+  const spacesJson = await spacesResp.json().catch((): MwsSpacesResponse => ({})) as MwsSpacesResponse;
+  const spaces: MwsSpaceItem[] = spacesJson?.data?.spaces || spacesJson?.spaces || [];
+
+  for (const space of spaces) {
+    const spaceId = validateSpaceId(space.id || space.spaceId);
+    if (!spaceId) continue;
+
+    const nodesResp = await fetch(
+      `${BASE_URL()}/fusion/v1/spaces/${encodeURIComponent(spaceId)}/nodes`,
+      { headers: getMwsHeaders() }
+    );
+    if (!nodesResp.ok) continue;
+
+    const nodesJson = await nodesResp.json().catch((): MwsNodesListResponse => ({})) as MwsNodesListResponse;
+    const nodes = nodesJson?.data?.nodes || nodesJson?.nodes || [];
+    const found = nodes.find((node) => {
+      const record = node as Record<string, unknown>;
+      return record.id === nodeId || record.nodeId === nodeId;
+    });
+
+    if (found) {
+      return {
+        ...(found as Record<string, unknown>),
+        spaceId,
+      };
+    }
+  }
+
   return null;
 }
 
@@ -264,7 +307,20 @@ router.get('/nodes/:nodeId', async (req: Request, res: Response) => {
       `${BASE_URL()}/fusion/v1/nodes/${encodeURIComponent(nodeId)}`,
       { headers: getMwsHeaders() }
     );
-    const data = await resp.json();
+    const data = await resp.json().catch(() => ({}));
+
+    if (resp.status === 403) {
+      const fallbackNode = await findNodeViaSpaces(nodeId);
+      if (fallbackNode) {
+        return res.json({
+          accessLimited: true,
+          data: {
+            node: fallbackNode,
+          },
+        });
+      }
+    }
+
     res.status(resp.status).json(data);
   } catch {
     res.status(502).json({ error: 'Failed to fetch node details' });

@@ -460,17 +460,27 @@ strong { color: var(--text); font-weight: 600; }
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow-x: auto;
+  padding: 4px 0;
+  scrollbar-width: none;
+}
+
+.page-views-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .page-view-tab {
-  height: 28px;
+  width: 156px;
+  height: 30px;
+  flex: 0 0 156px;
   border: 1px solid transparent;
   border-radius: 7px;
-  padding: 0 4px 0 0;
+  padding: 0 4px 0 2px;
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
+  gap: 4px;
   font-size: 12px;
   background: transparent;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
@@ -489,21 +499,34 @@ strong { color: var(--text); font-weight: 600; }
 
 .page-view-tab-main {
   height: 26px;
+  min-width: 0;
+  flex: 1 1 auto;
   border-radius: 6px;
   padding: 0 8px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  justify-content: flex-start;
 }
 
 .page-view-tab-icon {
+  flex: 0 0 18px;
   font-size: 12px;
   opacity: 0.9;
+  text-align: center;
+}
+
+.page-view-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .page-view-tab-remove {
   width: 22px;
   height: 22px;
+  flex: 0 0 22px;
   border-radius: 5px;
   color: var(--text-muted);
   display: inline-flex;
@@ -517,6 +540,11 @@ strong { color: var(--text); font-weight: 600; }
 .page-view-tab:hover .page-view-tab-remove,
 .page-view-tab.active .page-view-tab-remove {
   opacity: 1;
+}
+
+.page-view-tab-remove--ghost {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .page-view-tab-remove:hover {
@@ -994,8 +1022,12 @@ strong { color: var(--text); font-weight: 600; }
 
 .page-gallery-meta {
   font-size: 12px;
-  color: var(--text-muted);
   margin-bottom: 8px;
+}
+
+.page-status-field {
+  display: grid;
+  gap: 8px;
 }
 
 .page-gallery-card h4 {
@@ -1062,28 +1094,86 @@ strong { color: var(--text); font-weight: 600; }
 
 .page-kanban-col-dot.is-todo,
 .page-kanban-card-status.is-todo,
-.page-form-status.is-todo {
+.page-form-status.is-todo,
+.page-gallery-meta.is-todo,
+.page-gantt-label-badge.is-todo {
   background: color-mix(in srgb, #f1b84b 78%, transparent);
   color: #f6cf7b;
 }
 
+.page-kanban-col--creator {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.page-kanban-add-col,
+.page-kanban-create-group {
+  width: 100%;
+  min-height: 120px;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-secondary) 72%, var(--bg) 28%);
+}
+
+.page-kanban-add-col {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.page-kanban-add-col:hover {
+  color: var(--text);
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.page-kanban-add-col-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.page-kanban-create-group {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 12px;
+}
+
+.page-kanban-create-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .page-kanban-col-dot.is-progress,
 .page-kanban-card-status.is-progress,
-.page-form-status.is-progress {
+.page-form-status.is-progress,
+.page-gallery-meta.is-progress,
+.page-gantt-label-badge.is-progress {
   background: color-mix(in srgb, #59a7ff 78%, transparent);
   color: #8fc4ff;
 }
 
 .page-kanban-col-dot.is-done,
 .page-kanban-card-status.is-done,
-.page-form-status.is-done {
+.page-form-status.is-done,
+.page-gallery-meta.is-done,
+.page-gantt-label-badge.is-done {
   background: color-mix(in srgb, #5bd18b 78%, transparent);
   color: #8ce4b0;
 }
 
+.page-kanban-col-dot.is-custom,
+.page-kanban-card-status.is-custom,
+.page-form-status.is-custom,
+.page-gallery-meta.is-custom,
+.page-gantt-label-badge.is-custom,
 .page-kanban-col-dot.is-other,
 .page-kanban-card-status.is-other,
-.page-form-status.is-other {
+.page-form-status.is-other,
+.page-gallery-meta.is-other,
+.page-gantt-label-badge.is-other {
   background: color-mix(in srgb, var(--text-muted) 72%, transparent);
   color: var(--text-secondary);
 }
@@ -1136,6 +1226,7 @@ strong { color: var(--text); font-weight: 600; }
   color: var(--text-muted);
 }
 
+.page-status-badge,
 .page-kanban-card-status,
 .page-form-status {
   display: inline-flex;
@@ -1333,6 +1424,7 @@ strong { color: var(--text); font-weight: 600; }
 .page-gantt-label-badge.is-todo,
 .page-gantt-label-badge.is-progress,
 .page-gantt-label-badge.is-done,
+.page-gantt-label-badge.is-custom,
 .page-gantt-label-badge.is-other {
   color: #111827;
 }
@@ -1511,9 +1603,39 @@ strong { color: var(--text); font-weight: 600; }
 }
 
 [data-theme='light'] .page-gantt-label-badge {
-  background: #f4f5f7;
   border-color: rgba(17, 24, 39, 0.12);
   color: #111827;
+}
+
+[data-theme='light'] .page-gantt-label-badge.is-todo,
+[data-theme='light'] .page-form-status.is-todo,
+[data-theme='light'] .page-gallery-meta.is-todo {
+  background: #f8d376;
+  color: #6f4700;
+}
+
+[data-theme='light'] .page-gantt-label-badge.is-progress,
+[data-theme='light'] .page-form-status.is-progress,
+[data-theme='light'] .page-gallery-meta.is-progress {
+  background: #8fcbff;
+  color: #0a4f87;
+}
+
+[data-theme='light'] .page-gantt-label-badge.is-done,
+[data-theme='light'] .page-form-status.is-done,
+[data-theme='light'] .page-gallery-meta.is-done {
+  background: #97e3b3;
+  color: #0b5e35;
+}
+
+[data-theme='light'] .page-gantt-label-badge.is-custom,
+[data-theme='light'] .page-form-status.is-custom,
+[data-theme='light'] .page-gallery-meta.is-custom,
+[data-theme='light'] .page-gantt-label-badge.is-other,
+[data-theme='light'] .page-form-status.is-other,
+[data-theme='light'] .page-gallery-meta.is-other {
+  background: #d7dbe3;
+  color: #475569;
 }
 
 .page-gantt-color-modal {

@@ -30,7 +30,14 @@ function MwsTableNodeView(props: NodeViewProps) {
   const viewType = (props.node.attrs.viewType as string) || '';
   return (
     <NodeViewWrapper className="mws-table-node-view" data-drag-handle="">
-      <TableEmbed dstId={dstId} title={title} viewId={viewId} viewName={viewName} viewType={viewType} />
+      <TableEmbed
+        dstId={dstId}
+        title={title}
+        viewId={viewId}
+        viewName={viewName}
+        viewType={viewType}
+        onRemove={() => props.deleteNode()}
+      />
     </NodeViewWrapper>
   );
 }
@@ -40,7 +47,7 @@ function MwsPageNodeView(props: NodeViewProps) {
   const title = (props.node.attrs.title as string) || '';
   return (
     <NodeViewWrapper className="mws-page-node-view" data-drag-handle="">
-      <MwsPageEmbed nodeId={nodeId} title={title} />
+      <MwsPageEmbed nodeId={nodeId} title={title} onRemove={() => props.deleteNode()} />
     </NodeViewWrapper>
   );
 }

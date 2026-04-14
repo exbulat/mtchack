@@ -47,8 +47,8 @@ export const searchLimiter = rateLimit({
 
 export const tablesLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 100,
-  message: 'Too many table requests. Maximum 100 per minute.',
+  max: 600,
+  message: 'Too many table requests. Maximum 600 per minute.',
   standardHeaders: true,
   legacyHeaders: false,
 });

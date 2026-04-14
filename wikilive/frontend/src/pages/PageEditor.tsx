@@ -544,7 +544,7 @@ export default function PageEditor() {
         setContent(nextContent);
         skipTitleDebounceRef.current = true;
       } catch {
-        /* РЎРѓРЎвЂљРЎР‚Р В°Р Р…Р С‘РЎвЂ Р В° Р Р…Р Вµ Р В·Р В°Р С–РЎР‚РЎС“Р В·Р С‘Р В»Р В°РЎРѓРЎРЉ */
+        /* Ignore load errors and keep the editor in a safe empty state. */
       } finally {
         if (mounted) setLoading(false);
       }
@@ -555,7 +555,7 @@ export default function PageEditor() {
     };
   }, [draftStorageKey, pageId]);
 
-  // Р В·Р В°Р С–Р С•Р В»Р С•Р Р†Р С•Р С” РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С•РЎвЂљР Т‘Р ВµР В»РЎРЉР Р…Р С•Р в„– Р В·Р В°Р Т‘Р ВµРЎР‚Р В¶Р С”Р С•Р в„–, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р Р…Р Вµ Р С—Р В»Р С•Р Т‘Р С‘РЎвЂљРЎРЉ РЎР‚Р ВµР Р†Р С‘Р В·Р С‘Р С‘ Р С”Р С•Р Р…РЎвЂљР ВµР Р…РЎвЂљР В° Р Р…Р В° Р С”Р В°Р В¶Р Т‘РЎС“РЎР‹ Р В±РЎС“Р С”Р Р†РЎС“
+  // Debounced title sync keeps sidebar titles fresh without creating a revision on every keystroke.
   useEffect(() => {
     if (!pageId) return;
     if (skipTitleDebounceRef.current) {
@@ -1060,7 +1060,7 @@ export default function PageEditor() {
                   onClick={() => setActiveView(viewId)}
                 >
                   <span className="page-view-tab-icon">{view.icon}</span>
-                  <span>{view.label}</span>
+                  <span className="page-view-tab-label">{view.label}</span>
                 </button>
                 {viewId !== 'page' && (
                   <button
@@ -1075,6 +1075,7 @@ export default function PageEditor() {
                     x
                   </button>
                 )}
+                {viewId === 'page' && <span className="page-view-tab-remove page-view-tab-remove--ghost" aria-hidden="true" />}
               </div>
             );
           })}
@@ -1248,7 +1249,7 @@ export default function PageEditor() {
 
       </div>
 
-      {/* РІвЂќР‚РІвЂќР‚ Floating: Р С™Р С•Р СР СР ВµР Р…РЎвЂљР В°РЎР‚Р С‘Р С‘ (Р С”Р В°РЎР‚РЎвЂљР С•РЎвЂЎР С”Р С‘) РІвЂќР‚РІвЂќР‚ */}
+      {/* Floating panel: comments */}
       {pageId && (
         <FloatingComments
           pageId={pageId}
@@ -1259,7 +1260,7 @@ export default function PageEditor() {
         />
       )}
 
-      {/* РІвЂќР‚РІвЂќР‚ Floating: Р СљР В°РЎв‚¬Р С‘Р Р…Р В° Р Р†РЎР‚Р ВµР СР ВµР Р…Р С‘ РІвЂќР‚РІвЂќР‚ */}
+      {/* Floating panel: revision history */}
       {showTimeline && (
         <FloatingPanel
           title="Машина времени"
@@ -1528,7 +1529,7 @@ export default function PageEditor() {
             <button className="ai-floating-close" onClick={() => setShowAiPanel(false)}>x</button>
           </div>
           <div className="ai-floating-body">
-            {/* Р СџР ВµРЎР‚Р ВµР С”Р В»РЎР‹РЎвЂЎР В°РЎвЂљР ВµР В»РЎРЉ РЎР‚Р ВµР В¶Р С‘Р СР В° */}
+            {/* AI mode switcher */}
             <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
               <button
                 className={`toolbar-btn${aiMode === 'page' ? ' active' : ''}`}
@@ -1574,7 +1575,7 @@ export default function PageEditor() {
                 </button>
               )}
             </div>
-            {/* Р В Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљ Р С—Р С•Р С‘РЎРѓР С”Р В° Р С—Р С• Р Р†РЎРѓР ВµР С Р Т‘Р С•Р С”РЎС“Р СР ВµР Р…РЎвЂљР В°Р С */}
+            {/* AI response */}
             {aiResult && (
               <div style={{
                 marginTop: 10,

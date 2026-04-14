@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 interface MwsPageEmbedProps {
   nodeId: string;
   title?: string;
+  onRemove?: () => void;
 }
 
 function pickObject(value: unknown): Record<string, unknown> {
@@ -58,10 +59,16 @@ function parseNodePayload(raw: unknown, fallbackTitle?: string): { title: string
   return { title: fallbackTitle || 'MWS page', body: '' };
 }
 
-export default function MwsPageEmbed({ nodeId, title }: MwsPageEmbedProps) {
+function hasAccessLimitedFlag(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  return Boolean((raw as Record<string, unknown>).accessLimited);
+}
+
+export default function MwsPageEmbed({ nodeId, title, onRemove }: MwsPageEmbedProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accessLimited, setAccessLimited] = useState(false);
   const [pageTitle, setPageTitle] = useState(title || '');
   const [body, setBody] = useState('');
   const savedRef = useRef({ pageTitle: title || '', body: '' });
@@ -71,11 +78,14 @@ export default function MwsPageEmbed({ nodeId, title }: MwsPageEmbedProps) {
     setError(null);
     try {
       const response = await api.getNode(nodeId);
+      const limited = hasAccessLimitedFlag(response);
       const parsed = parseNodePayload(response, title);
+      setAccessLimited(limited);
       setPageTitle(parsed.title);
       setBody(parsed.body);
       savedRef.current = { pageTitle: parsed.title, body: parsed.body };
     } catch (err) {
+      setAccessLimited(false);
       setError(err instanceof Error ? err.message : 'Не удалось загрузить страницу MWS');
     } finally {
       setLoading(false);
@@ -92,6 +102,7 @@ export default function MwsPageEmbed({ nodeId, title }: MwsPageEmbedProps) {
   );
 
   const save = useCallback(async () => {
+    if (accessLimited) return;
     setSaving(true);
     setError(null);
     try {
@@ -107,7 +118,7 @@ export default function MwsPageEmbed({ nodeId, title }: MwsPageEmbedProps) {
     } finally {
       setSaving(false);
     }
-  }, [body, nodeId, pageTitle]);
+  }, [accessLimited, body, nodeId, pageTitle]);
 
   if (loading) {
     return <div className="table-embed table-embed--loading">Загрузка страницы MWS...</div>;
@@ -130,7 +141,8 @@ export default function MwsPageEmbed({ nodeId, title }: MwsPageEmbedProps) {
           <input
             value={pageTitle}
             onChange={(event) => setPageTitle(event.target.value)}
-            onBlur={() => { if (hasChanges) void save(); }}
+            onBlur={() => { if (hasChanges && !accessLimited) void save(); }}
+            readOnly={accessLimited}
             style={{
               border: 'none',
               background: 'transparent',
@@ -145,17 +157,25 @@ export default function MwsPageEmbed({ nodeId, title }: MwsPageEmbedProps) {
         <button className="table-embed-btn" onClick={() => void load()} disabled={loading || saving}>
           {saving ? '...' : '↻'}
         </button>
+        {onRemove && (
+          <button className="table-embed-btn" onClick={onRemove} disabled={loading || saving} title="Убрать интеграцию">
+            ×
+          </button>
+        )}
       </div>
 
       <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
-        Контент ниже синхронизируется с MWS и визуально отделен рамкой от основного текста WikiLive.
+        {accessLimited
+          ? 'Эта страница доступна только для чтения: текущий API MWS не отдает полный контент узла, поэтому мы сохраняем связь и название страницы.'
+          : 'Контент ниже синхронизируется с MWS и визуально отделен рамкой от основного текста WikiLive.'}
       </div>
 
       {body ? (
         <textarea
           value={body}
           onChange={(event) => setBody(event.target.value)}
-          onBlur={() => { if (hasChanges) void save(); }}
+          onBlur={() => { if (hasChanges && !accessLimited) void save(); }}
+          readOnly={accessLimited}
           placeholder="Текст страницы MWS"
           style={{
             width: '100%',
@@ -190,10 +210,20 @@ export default function MwsPageEmbed({ nodeId, title }: MwsPageEmbedProps) {
       )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>
-        <span>{error ? error : saving ? 'Сохраняем...' : 'Синхронизация включена'}</span>
-        <button className="table-embed-btn" onClick={() => void save()} disabled={saving}>
-          Сохранить
-        </button>
+        <span>
+          {error
+            ? error
+            : accessLimited
+              ? 'Контент недоступен по API MWS, открыт безопасный read-only режим'
+              : saving
+                ? 'Сохраняем...'
+                : 'Синхронизация включена'}
+        </span>
+        {!accessLimited && (
+          <button className="table-embed-btn" onClick={() => void save()} disabled={saving}>
+            Сохранить
+          </button>
+        )}
       </div>
     </section>
   );

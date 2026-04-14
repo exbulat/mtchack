@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { CSSProperties } from 'react';
-export type KanbanStatus = 'To Do' | 'In Progress' | 'Done' | 'Other';
+export type KanbanStatus = string;
 
 export type ViewRecord = {
   id: string;
@@ -78,18 +78,75 @@ function getDayNumber(date: string, fallbackMonthKey: string): number {
   return Number.isFinite(parsed) ? parsed : 1;
 }
 
+const BUILTIN_STATUSES = ['To Do', 'In Progress', 'Done'] as const;
+const CUSTOM_STATUS_OPTION = '__custom_status__';
+
+function isBuiltInStatus(status: string): status is (typeof BUILTIN_STATUSES)[number] {
+  return BUILTIN_STATUSES.includes(status as (typeof BUILTIN_STATUSES)[number]);
+}
+
 function statusLabel(status: KanbanStatus): string {
   if (status === 'To Do') return 'К выполнению';
   if (status === 'In Progress') return 'В работе';
   if (status === 'Done') return 'Готово';
-  return 'Другое';
+  if (status === 'Other') return 'Свой статус';
+  return status.trim() || 'Свой статус';
 }
 
 function statusClassName(status: KanbanStatus): string {
   if (status === 'To Do') return 'todo';
   if (status === 'In Progress') return 'progress';
   if (status === 'Done') return 'done';
-  return 'other';
+  return 'custom';
+}
+
+type StatusFieldProps = {
+  value: KanbanStatus;
+  onChange: (status: KanbanStatus) => void;
+  className?: string;
+};
+
+function StatusField({ value, onChange, className = 'page-form-input' }: StatusFieldProps) {
+  const customInputRef = useRef<HTMLInputElement | null>(null);
+  const isCustom = !isBuiltInStatus(value);
+  const customValue = value === 'Other' ? '' : value;
+
+  useEffect(() => {
+    if (!isCustom) return;
+    customInputRef.current?.focus();
+    customInputRef.current?.select();
+  }, [isCustom]);
+
+  return (
+    <div className="page-status-field">
+      <select
+        className={className}
+        value={isCustom ? CUSTOM_STATUS_OPTION : value}
+        onChange={(event) => {
+          if (event.target.value === CUSTOM_STATUS_OPTION) {
+            onChange(customValue.trim() || 'Новый статус');
+            return;
+          }
+          onChange(event.target.value);
+        }}
+      >
+        <option value="To Do">К выполнению</option>
+        <option value="In Progress">В работе</option>
+        <option value="Done">Готово</option>
+        <option value={CUSTOM_STATUS_OPTION}>Свой статус</option>
+      </select>
+      {isCustom && (
+        <input
+          ref={customInputRef}
+          className={className}
+          type="text"
+          value={customValue}
+          placeholder="Введите свой статус"
+          onChange={(event) => onChange(event.target.value || 'Other')}
+        />
+      )}
+    </div>
+  );
 }
 
 function formatShortDate(date: string): string {
@@ -181,6 +238,9 @@ export default function PageViews({
     status: 'To Do' as KanbanStatus,
     notes: '',
   }));
+  const [kanbanCustomColumns, setKanbanCustomColumns] = useState<KanbanStatus[]>([]);
+  const [showKanbanColumnCreator, setShowKanbanColumnCreator] = useState(false);
+  const [newKanbanColumnTitle, setNewKanbanColumnTitle] = useState('');
   const [ganttDrag, setGanttDrag] = useState<null | {
     id: string;
     mode: 'move' | 'start' | 'end';
@@ -193,6 +253,17 @@ export default function PageViews({
   const sortedRecords = useMemo(
     () => [...records].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title, 'ru')),
     [records],
+  );
+  const recordCustomStatuses = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          sortedRecords
+            .map((record) => record.status)
+            .filter((status) => status && !isBuiltInStatus(status))
+        )
+      ),
+    [sortedRecords],
   );
   const selectedRecord = sortedRecords.find((record) => record.id === selectedRecordId) ?? null;
   const calendarDays = getDaysInMonth(calendarMonth);
@@ -223,6 +294,15 @@ export default function PageViews({
     onUpdateRecord(recordId, { title: trimmed });
   }
 
+  function createKanbanColumn(): void {
+    const title = newKanbanColumnTitle.trim();
+    if (!title) return;
+    if (isBuiltInStatus(title)) return;
+    setKanbanCustomColumns((prev) => (prev.includes(title) ? prev : [...prev, title]));
+    setNewKanbanColumnTitle('');
+    setShowKanbanColumnCreator(false);
+  }
+
   useEffect(() => {
     if (!selectedRecordId) return;
     if (sortedRecords.some((record) => record.id === selectedRecordId)) return;
@@ -238,6 +318,17 @@ export default function PageViews({
   useEffect(() => {
     setCustomColorDraft(selectedRecord?.color || '#111111');
   }, [selectedRecord?.id, selectedRecord?.color]);
+
+  useEffect(() => {
+    if (recordCustomStatuses.length === 0) return;
+    setKanbanCustomColumns((prev) => {
+      const next = [...prev];
+      for (const status of recordCustomStatuses) {
+        if (!next.includes(status)) next.push(status);
+      }
+      return next;
+    });
+  }, [recordCustomStatuses]);
 
   useEffect(() => {
     if (!ganttDrag) return;
@@ -480,7 +571,7 @@ export default function PageViews({
                 </div>
                 <div className="page-gallery-card-body">
                   <h4>{card.title}</h4>
-                  <div className="page-gallery-meta">{statusLabel(card.status)}</div>
+                  <div className={`page-status-badge page-gallery-meta is-${statusClassName(card.status)}`}>{statusLabel(card.status)}</div>
                   <p>{card.notes || card.excerpt || 'Без описания'}</p>
                 </div>
               </article>
@@ -494,7 +585,7 @@ export default function PageViews({
   }
 
   function renderKanban() {
-    const statuses: KanbanStatus[] = ['To Do', 'In Progress', 'Done', 'Other'];
+    const statuses: KanbanStatus[] = [...BUILTIN_STATUSES, ...kanbanCustomColumns];
     return (
       <div className="page-grid-view">
         <div className="page-grid-view-head">
@@ -555,6 +646,53 @@ export default function PageViews({
               </section>
             );
           })}
+          <section className="page-kanban-col page-kanban-col--creator">
+            {showKanbanColumnCreator ? (
+              <div className="page-kanban-create-group">
+                <input
+                  className="page-form-input"
+                  placeholder="Название группы"
+                  value={newKanbanColumnTitle}
+                  onChange={(event) => setNewKanbanColumnTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      createKanbanColumn();
+                    }
+                    if (event.key === 'Escape') {
+                      setShowKanbanColumnCreator(false);
+                      setNewKanbanColumnTitle('');
+                    }
+                  }}
+                  autoFocus
+                />
+                <div className="page-kanban-create-actions">
+                  <button type="button" className="btn btn-primary" onClick={createKanbanColumn} disabled={!newKanbanColumnTitle.trim()}>
+                    Создать
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      setShowKanbanColumnCreator(false);
+                      setNewKanbanColumnTitle('');
+                    }}
+                  >
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="page-kanban-add-col"
+                onClick={() => setShowKanbanColumnCreator(true)}
+              >
+                <span className="page-kanban-add-col-icon">+</span>
+                <span>Новая группа</span>
+              </button>
+            )}
+          </section>
         </div>
       </div>
     );
@@ -856,18 +994,12 @@ export default function PageViews({
                 }
               }}
             />
-            <select
-              className="page-form-input"
+            <StatusField
               value={selectedRecord?.source === 'manual' ? selectedRecord.status : 'To Do'}
-              onChange={(event) => {
-                if (selectedRecord?.source === 'manual') onUpdateRecord(selectedRecord.id, { status: event.target.value as KanbanStatus });
+              onChange={(status) => {
+                if (selectedRecord?.source === 'manual') onUpdateRecord(selectedRecord.id, { status });
               }}
-            >
-              <option value="To Do">К выполнению</option>
-              <option value="In Progress">В работе</option>
-              <option value="Done">Готово</option>
-              <option value="Other">Другое</option>
-            </select>
+            />
             <textarea
               className="page-form-input page-form-textarea"
               placeholder="Заметки"
@@ -934,16 +1066,10 @@ export default function PageViews({
           </label>
           <label className="page-view-field">
             <span>Статус</span>
-            <select
-              className="page-form-input"
+            <StatusField
               value={selectedRecord.status}
-              onChange={(event) => onUpdateRecord(selectedRecord.id, { status: event.target.value as KanbanStatus })}
-            >
-              <option value="To Do">К выполнению</option>
-              <option value="In Progress">В работе</option>
-              <option value="Done">Готово</option>
-              <option value="Other">Другое</option>
-            </select>
+              onChange={(status) => onUpdateRecord(selectedRecord.id, { status })}
+            />
           </label>
           <label className="page-view-field">
             <span>Дата</span>
@@ -1094,16 +1220,10 @@ export default function PageViews({
               </label>
               <label className="page-view-field">
                 <span>Статус</span>
-                <select
-                  className="page-form-input"
+                <StatusField
                   value={ganttDraft.status}
-                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, status: event.target.value as KanbanStatus }))}
-                >
-                  <option value="To Do">К выполнению</option>
-                  <option value="In Progress">В работе</option>
-                  <option value="Done">Готово</option>
-                  <option value="Other">Другое</option>
-                </select>
+                  onChange={(status) => setGanttDraft((prev) => ({ ...prev, status }))}
+                />
               </label>
               <label className="page-view-field">
                 <span>Дата начала</span>
