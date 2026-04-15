@@ -3273,6 +3273,8 @@ strong { color: var(--text); font-weight: 600; }
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .table-embed-filter {
   height: 24px;
@@ -3439,6 +3441,13 @@ strong { color: var(--text); font-weight: 600; }
   flex-direction: column;
   gap: 2px;
 }
+.table-embed-notice {
+  padding: 10px 12px;
+  background: color-mix(in srgb, #22c55e 10%, var(--bg));
+  color: #166534;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
 .table-embed-info {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
@@ -3457,6 +3466,19 @@ strong { color: var(--text); font-weight: 600; }
 .table-embed-count {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.table-embed-gantt-toolbar {
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.table-embed-gantt-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .table-embed-kanban-view {

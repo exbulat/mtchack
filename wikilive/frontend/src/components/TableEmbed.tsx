@@ -45,10 +45,32 @@ type KanbanHistoryEntry = {
   createdAt: number;
 };
 
+type NormalizedField = {
+  id: string;
+  name: string;
+  editable: boolean;
+  typeHint: string | null;
+  raw: MwsField;
+};
+
+type GanttDraft = {
+  title: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+};
+
 const PAGE_SIZE = 50;
 const LIVE_POLL_INTERVAL_MS = 20_000;
 const KANBAN_HISTORY_KEY_PREFIX = 'wikilive-mws-kanban-history:';
 const CREATE_OPTION_VALUE = '__create_new_option__';
+const RECORD_ID_PATTERN = /^rec[a-zA-Z0-9]+$/;
+const DATASHEET_ID_PATTERN = /^dst[a-zA-Z0-9]{10,}$/;
+const TABLE_GANTT_DAY_WIDTH = 56;
+const TABLE_GANTT_SIDE_WIDTH = 280;
+const TABLE_GANTT_COLLAPSED_WIDTH = 34;
+const TABLE_GANTT_VISIBLE_DAYS = 16;
+const TABLE_GANTT_NAV_STEP = 7;
 const EDITABLE_FIELD_TYPE_HINTS = new Set([
   'text',
   'singletext',
@@ -99,21 +121,129 @@ function formatSyncTime(timestamp: number | null): string {
   });
 }
 
+function looksLikeRecordId(value: string): boolean {
+  return RECORD_ID_PATTERN.test(value.trim());
+}
+
+function resolveLinkedRecordToken(value: string, linkedRecordTextById: Record<string, string>): string {
+  const trimmed = value.trim();
+  if (!looksLikeRecordId(trimmed)) return value;
+  return linkedRecordTextById[trimmed] || value;
+}
+
+function extractMwsObjectText(
+  raw: Record<string, unknown>,
+  linkedRecordTextById: Record<string, string>,
+): string {
+  const directKeys = [
+    'text',
+    'name',
+    'title',
+    'label',
+    'value',
+    'displayValue',
+    'displayText',
+    'recordTitle',
+    'recordName',
+    'primaryText',
+    'primaryValue',
+    'fullName',
+  ] as const;
+
+  for (const key of directKeys) {
+    const candidate = raw[key];
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return resolveLinkedRecordToken(candidate, linkedRecordTextById);
+    }
+    if (typeof candidate === 'number' || typeof candidate === 'boolean') {
+      return String(candidate);
+    }
+  }
+
+  if (raw.cellValue !== undefined) return mwsCellDisplayValue(raw.cellValue, linkedRecordTextById);
+  if (raw.displayValue !== undefined) return mwsCellDisplayValue(raw.displayValue, linkedRecordTextById);
+  if (raw.value !== undefined) return mwsCellDisplayValue(raw.value, linkedRecordTextById);
+  if (raw.record !== undefined) return mwsCellDisplayValue(raw.record, linkedRecordTextById);
+  if (raw.fields !== undefined) return mwsCellDisplayValue(raw.fields, linkedRecordTextById);
+
+  const idCandidate = raw.recordId ?? raw.id;
+  if (typeof idCandidate === 'string' && linkedRecordTextById[idCandidate]) {
+    return linkedRecordTextById[idCandidate];
+  }
+
+  return '';
+}
+
 /** MWS Fusion часто отдаёт не строку, а объект (rich text, select, ссылка и т.д.). */
-function mwsCellDisplayValue(raw: unknown): string {
+function mwsCellDisplayValue(raw: unknown, linkedRecordTextById: Record<string, string> = {}): string {
   if (raw == null) return '';
-  if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
+  if (typeof raw === 'string') return resolveLinkedRecordToken(raw, linkedRecordTextById);
+  if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
   if (Array.isArray(raw)) {
-    return raw.map(mwsCellDisplayValue).filter((s) => s.length > 0).join(', ');
+    return raw
+      .map((item) => mwsCellDisplayValue(item, linkedRecordTextById))
+      .filter((s) => s.length > 0)
+      .join(', ');
   }
   if (typeof raw === 'object') {
-    const o = raw as Record<string, unknown>;
-    if (typeof o.text === 'string') return o.text;
-    if (typeof o.name === 'string') return o.name;
-    if (typeof o.title === 'string') return o.title;
-    if (o.cellValue !== undefined) return mwsCellDisplayValue(o.cellValue);
+    return extractMwsObjectText(raw as Record<string, unknown>, linkedRecordTextById);
   }
   return '';
+}
+
+function collectRecordIdsFromValue(raw: unknown, target: Set<string>): void {
+  if (raw == null) return;
+  if (typeof raw === 'string') {
+    if (looksLikeRecordId(raw)) target.add(raw.trim());
+    return;
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) collectRecordIdsFromValue(item, target);
+    return;
+  }
+  if (typeof raw !== 'object') return;
+
+  const record = raw as Record<string, unknown>;
+  for (const [key, value] of Object.entries(record)) {
+    if ((key === 'recordId' || key === 'id') && typeof value === 'string' && looksLikeRecordId(value)) {
+      target.add(value.trim());
+    }
+    collectRecordIdsFromValue(value, target);
+  }
+}
+
+function collectDatasheetIdsFromUnknown(raw: unknown, target: Set<string>, depth = 0): void {
+  if (depth > 6 || raw == null) return;
+  if (typeof raw === 'string') {
+    if (DATASHEET_ID_PATTERN.test(raw.trim())) target.add(raw.trim());
+    return;
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) collectDatasheetIdsFromUnknown(item, target, depth + 1);
+    return;
+  }
+  if (typeof raw !== 'object') return;
+
+  const record = raw as Record<string, unknown>;
+  for (const [key, value] of Object.entries(record)) {
+    const normalizedKey = key.toLowerCase();
+    if (
+      normalizedKey.includes('dst') ||
+      normalizedKey.includes('sheet') ||
+      normalizedKey.includes('datasheet') ||
+      normalizedKey.includes('foreign')
+    ) {
+      collectDatasheetIdsFromUnknown(value, target, depth + 1);
+      continue;
+    }
+    if (typeof value === 'string' && DATASHEET_ID_PATTERN.test(value.trim())) {
+      target.add(value.trim());
+      continue;
+    }
+    if (typeof value === 'object') {
+      collectDatasheetIdsFromUnknown(value, target, depth + 1);
+    }
+  }
 }
 
 function normalizeFieldId(field: MwsField): string {
@@ -174,7 +304,7 @@ function normalizeViewMode(viewType?: string, viewName?: string): ViewMode {
   if (source.includes('calendar') || source.includes('календарь')) return 'calendar';
   if (source.includes('gallery') || source.includes('галерея')) return 'gallery';
   if (source.includes('kanban') || source.includes('канбан')) return 'kanban';
-  if (source.includes('architecture') || source.includes('архитектура')) return 'table';
+  if (source.includes('architecture') || source.includes('архитектура')) return 'architecture';
   if (source.includes('gantt') || source.includes('гант')) return 'gantt';
   if (source.includes('grid') || source.includes('сетка')) return 'table';
   if (source.includes('form') || source.includes('форм')) return 'form';
@@ -489,7 +619,11 @@ function formatDateCell(value: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value.replace(/-/g, '/') : value;
 }
 
-function formatFieldDisplayValue(field: { typeHint: string | null; name: string }, raw: unknown): string {
+function formatFieldDisplayValue(
+  field: { typeHint: string | null; name: string },
+  raw: unknown,
+  linkedRecordTextById: Record<string, string> = {},
+): string {
   const parsedDate = parseDateValue(raw);
   if (
     parsedDate &&
@@ -502,13 +636,47 @@ function formatFieldDisplayValue(field: { typeHint: string | null; name: string 
     return formatDateCell(parsedDate);
   }
 
-  return mwsCellDisplayValue(raw);
+  return mwsCellDisplayValue(raw, linkedRecordTextById);
 }
 
 function formatShortDate(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
+}
+
+function parseIsoDate(value: string): Date | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatIsoDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function addDays(value: string, delta: number): string {
+  const parsed = parseIsoDate(value);
+  if (!parsed) return value;
+  parsed.setDate(parsed.getDate() + delta);
+  return formatIsoDate(parsed);
+}
+
+function diffDays(from: string, to: string): number {
+  const fromDate = parseIsoDate(from);
+  const toDate = parseIsoDate(to);
+  if (!fromDate || !toDate) return 0;
+  return Math.round((toDate.getTime() - fromDate.getTime()) / 86_400_000);
+}
+
+function monthKeyFromDate(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value.slice(0, 7) : getMonthKey();
+}
+
+function formatWeekdayShort(value: string): string {
+  const parsed = parseIsoDate(value);
+  if (!parsed) return '';
+  return parsed.toLocaleDateString('ru-RU', { weekday: 'short' });
 }
 
 function getMonthKey(value?: string | null): string {
@@ -565,7 +733,22 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   const [kanbanSavingOptionFields, setKanbanSavingOptionFields] = useState<Record<string, boolean>>({});
   const [savingTaskModal, setSavingTaskModal] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthKey());
+  const [linkedRecordTextById, setLinkedRecordTextById] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState<'csv' | 'xlsx' | 'pdf' | null>(null);
+  const [ganttCenterDate, setGanttCenterDate] = useState(() => formatIsoDate(new Date()));
+  const [isGanttSidebarCollapsed, setIsGanttSidebarCollapsed] = useState(false);
+  const [showGanttCreateModal, setShowGanttCreateModal] = useState(false);
+  const [ganttDraftError, setGanttDraftError] = useState('');
+  const [ganttDraft, setGanttDraft] = useState<GanttDraft>(() => ({
+    title: '',
+    startDate: formatIsoDate(new Date()),
+    endDate: addDays(formatIsoDate(new Date()), 2),
+    status: 'To Do',
+  }));
   const viewMode = useMemo(() => normalizeViewMode(viewType, viewName), [viewType, viewName]);
   const kanbanHistoryStorageKey = useMemo(
     () => getKanbanHistoryStorageKey(dstId, viewId),
@@ -614,6 +797,10 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   }, [kanbanHistoryStorageKey]);
 
   useEffect(() => {
+    setLinkedRecordTextById({});
+  }, [dstId, viewId]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(kanbanHistoryStorageKey, JSON.stringify(kanbanHistory));
     } catch {
@@ -654,7 +841,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     };
   }, [load, page]);
 
-  const normalizedFields = useMemo(
+  const normalizedFields = useMemo<NormalizedField[]>(
     () =>
       fields
         .map((f) => ({
@@ -667,6 +854,92 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         .filter((f) => f.id),
     [fields, records]
   );
+
+  const displayCellValue = useCallback(
+    (raw: unknown) => mwsCellDisplayValue(raw, linkedRecordTextById),
+    [linkedRecordTextById]
+  );
+
+  const displayFieldValue = useCallback(
+    (field: { typeHint: string | null; name: string }, raw: unknown) =>
+      formatFieldDisplayValue(field, raw, linkedRecordTextById),
+    [linkedRecordTextById]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const resolveLinkedRecords = async () => {
+      const recordIds = new Set<string>();
+      for (const record of records) {
+        for (const value of Object.values(record.fields || {})) {
+          collectRecordIdsFromValue(value, recordIds);
+        }
+      }
+
+      if (recordIds.size === 0) {
+        setLinkedRecordTextById({});
+        return;
+      }
+
+      const nextMap: Record<string, string> = {};
+      const currentPrimaryFieldId = normalizeFieldId(fields[0] || {});
+      if (currentPrimaryFieldId) {
+        for (const record of records) {
+          const currentRecordId = String(record.recordId || record.id || '').trim();
+          if (!currentRecordId || !recordIds.has(currentRecordId)) continue;
+          const currentTitle = mwsCellDisplayValue((record.fields || {})[currentPrimaryFieldId], nextMap).trim();
+          if (currentTitle) nextMap[currentRecordId] = currentTitle;
+        }
+      }
+
+      const relatedDatasheetIds = new Set<string>();
+      for (const field of fields) {
+        collectDatasheetIdsFromUnknown(field, relatedDatasheetIds);
+      }
+      relatedDatasheetIds.delete(dstId);
+
+      if (relatedDatasheetIds.size === 0) {
+        if (!cancelled) {
+          setLinkedRecordTextById(nextMap);
+        }
+        return;
+      }
+      await Promise.all(
+        Array.from(relatedDatasheetIds).map(async (relatedDstId) => {
+          try {
+            const [relatedFieldsData, relatedRecordsData] = await Promise.all([
+              api.getFields(relatedDstId),
+              api.getRecords(relatedDstId, 500),
+            ]);
+            const relatedFields = (relatedFieldsData?.data?.fields || relatedFieldsData?.fields || []) as MwsField[];
+            const relatedRecords = (relatedRecordsData?.data?.records || relatedRecordsData?.records || []) as MwsRecord[];
+            const primaryRelatedFieldId = normalizeFieldId(relatedFields[0] || {});
+
+            for (const relatedRecord of relatedRecords) {
+              const relatedRecordId = String(relatedRecord.recordId || relatedRecord.id || '').trim();
+              if (!relatedRecordId || !recordIds.has(relatedRecordId)) continue;
+              const primaryValue = primaryRelatedFieldId
+                ? mwsCellDisplayValue((relatedRecord.fields || {})[primaryRelatedFieldId], nextMap)
+                : '';
+              if (primaryValue) nextMap[relatedRecordId] = primaryValue;
+            }
+          } catch {
+            // Keep graceful fallback to raw tokens when relation metadata cannot be resolved.
+          }
+        })
+      );
+
+      if (!cancelled && Object.keys(nextMap).length > 0) {
+        setLinkedRecordTextById((prev) => ({ ...prev, ...nextMap }));
+      }
+    };
+
+    void resolveLinkedRecords();
+    return () => {
+      cancelled = true;
+    };
+  }, [dstId, fields, records]);
 
   const activeKanbanRecord = useMemo(
     () => records.find((record) => (record.recordId || record.id || '') === activeKanbanRecordId) || null,
@@ -690,7 +963,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         field.id,
         (field.typeHint || '').includes('date')
           ? parseDateValue((activeKanbanRecord.fields || {})[field.id]) || ''
-          : formatFieldDisplayValue(field, (activeKanbanRecord.fields || {})[field.id]),
+          : displayFieldValue(field, (activeKanbanRecord.fields || {})[field.id]),
       ])
     );
     setKanbanTaskDraft(nextDraft);
@@ -702,23 +975,29 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     setKanbanSavingOptionFields({});
   }, [dstId, viewId]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const filteredRecords = useMemo(() => {
     let result = records.slice(0, PAGE_SIZE * page);
     if (filterText.trim()) {
       const lower = filterText.toLowerCase();
       result = result.filter((r) =>
-        Object.values(r.fields || {}).some((v) => mwsCellDisplayValue(v).toLowerCase().includes(lower))
+        Object.values(r.fields || {}).some((v) => displayCellValue(v).toLowerCase().includes(lower))
       );
     }
     if (sortField) {
       result = [...result].sort((a, b) => {
-        const av = mwsCellDisplayValue((a.fields || {})[sortField]);
-        const bv = mwsCellDisplayValue((b.fields || {})[sortField]);
+        const av = displayCellValue((a.fields || {})[sortField]);
+        const bv = displayCellValue((b.fields || {})[sortField]);
         return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
       });
     }
     return result;
-  }, [records, page, filterText, sortField, sortAsc]);
+  }, [records, page, filterText, sortField, sortAsc, displayCellValue]);
 
   const canReorderRows = viewMode === 'table' && !sortField && !filterText.trim() && !showNewRow;
 
@@ -830,7 +1109,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     const targetField = normalizedFields.find((field) => field.id === fieldId);
     if (!targetField || (!targetField.editable && !force)) return;
     const previousRecord = records.find((record) => (record.recordId || record.id) === recordId);
-    const oldValue = mwsCellDisplayValue((previousRecord?.fields || {})[fieldId]);
+    const oldValue = displayCellValue((previousRecord?.fields || {})[fieldId]);
     if (oldValue === value) return;
 
     const cellKey = `${recordId}:${fieldId}`;
@@ -848,7 +1127,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         const latestRecordsResponse = await api.getRecords(dstId, Math.max(PAGE_SIZE * page, 100), viewId);
         const latestRecords = (latestRecordsResponse?.data?.records || latestRecordsResponse?.records || []) as MwsRecord[];
         const latestRecord = latestRecords.find((record) => (record.recordId || record.id || '') === recordId);
-        const persistedValue = mwsCellDisplayValue((latestRecord?.fields || {})[fieldId]).trim();
+        const persistedValue = displayCellValue((latestRecord?.fields || {})[fieldId]).trim();
         if (persistedValue.toLowerCase() === value.trim().toLowerCase()) {
           persistedRecords = latestRecords;
           updateAccepted = true;
@@ -1104,7 +1383,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     values.add('No status');
 
     for (const record of records) {
-      const value = mwsCellDisplayValue((record.fields || {})[statusFieldId]).trim() || 'No status';
+      const value = displayCellValue((record.fields || {})[statusFieldId]).trim() || 'No status';
       values.add(value);
     }
 
@@ -1125,7 +1404,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
       if (shouldCollectFromRecords) {
         for (const record of records) {
-          const value = mwsCellDisplayValue((record.fields || {})[field.id]).trim();
+          const value = displayCellValue((record.fields || {})[field.id]).trim();
           if (value) values.add(value);
         }
       }
@@ -1236,6 +1515,318 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     };
   }
 
+  const editableFieldIds = useMemo(
+    () => new Set(normalizedFields.filter((field) => field.editable).map((field) => field.id)),
+    [normalizedFields]
+  );
+  const architectureTypeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const field of normalizedFields) {
+      const label = field.typeHint || 'text';
+      counts.set(label, (counts.get(label) || 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((left, right) => right[1] - left[1]);
+  }, [normalizedFields]);
+  const linkedFieldCount = useMemo(
+    () =>
+      normalizedFields.filter((field) => {
+        const typeHint = (field.typeHint || '').toLowerCase();
+        return (
+          typeHint.includes('lookup') ||
+          typeHint.includes('relation') ||
+          typeHint.includes('link') ||
+          typeHint.includes('linked')
+        );
+      }).length,
+    [normalizedFields]
+  );
+  const resolvedLinkedRecordsCount = useMemo(() => Object.keys(linkedRecordTextById).length, [linkedRecordTextById]);
+
+  const ganttRecords = useMemo(
+    () =>
+      filteredRecords
+        .map((record) => {
+          const recordId = record.recordId || record.id || '';
+          const startDate = startDateFieldId ? parseDateValue((record.fields || {})[startDateFieldId]) : null;
+          const fallbackDate = dateFieldId ? parseDateValue((record.fields || {})[dateFieldId]) : null;
+          const resolvedStartDate = startDate || fallbackDate;
+          const resolvedEndDate = endDateFieldId
+            ? parseDateValue((record.fields || {})[endDateFieldId]) || resolvedStartDate
+            : resolvedStartDate;
+          if (!recordId || !resolvedStartDate) return null;
+
+          const status = statusFieldId ? displayCellValue((record.fields || {})[statusFieldId]).trim() || 'Без статуса' : 'Без статуса';
+          const statusStyle = getKanbanOptionStyle(status);
+
+          return {
+            id: recordId,
+            title: displayCellValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`,
+            startDate: resolvedStartDate,
+            endDate: resolvedEndDate || resolvedStartDate,
+            status,
+            color: (statusStyle?.borderColor as string | undefined) || (statusStyle?.color as string | undefined) || '#111111',
+          };
+        })
+        .filter((item): item is { id: string; title: string; startDate: string; endDate: string; status: string; color: string } => Boolean(item)),
+    [dateFieldId, displayCellValue, endDateFieldId, filteredRecords, getKanbanOptionStyle, primaryFieldId, startDateFieldId, statusFieldId]
+  );
+
+  useEffect(() => {
+    const nextCenter = ganttRecords[0]?.startDate;
+    if (!nextCenter) return;
+    setGanttCenterDate((prev) => prev || nextCenter);
+  }, [ganttRecords]);
+
+  const timelineStart = useMemo(
+    () => addDays(ganttCenterDate, -Math.floor(TABLE_GANTT_VISIBLE_DAYS / 2)),
+    [ganttCenterDate]
+  );
+  const timelineDays = useMemo(
+    () => Array.from({ length: TABLE_GANTT_VISIBLE_DAYS }, (_, index) => addDays(timelineStart, index)),
+    [timelineStart]
+  );
+  const timelineGrid = useMemo(
+    () => `repeat(${timelineDays.length}, minmax(${TABLE_GANTT_DAY_WIDTH}px, 1fr))`,
+    [timelineDays.length]
+  );
+  const timelineBackgroundSize = `${TABLE_GANTT_DAY_WIDTH}px 100%`;
+  const sidebarWidth = isGanttSidebarCollapsed ? TABLE_GANTT_COLLAPSED_WIDTH : TABLE_GANTT_SIDE_WIDTH;
+  const monthSegments = useMemo(() => {
+    const segments: Array<{ key: string; label: string; span: number }> = [];
+    for (const day of timelineDays) {
+      const key = monthKeyFromDate(day);
+      const current = segments[segments.length - 1];
+      if (current?.key === key) {
+        current.span += 1;
+      } else {
+        segments.push({ key, label: formatMonthLabel(key), span: 1 });
+      }
+    }
+    return segments;
+  }, [timelineDays]);
+
+  const buildRecordFieldsFromDraft = useCallback(
+    (draft: Record<string, string>) => {
+      const nextFields: Record<string, string> = {};
+      for (const [fieldId, value] of Object.entries(draft)) {
+        if (!editableFieldIds.has(fieldId)) continue;
+        const normalizedValue = value.trim();
+        if (!normalizedValue) continue;
+        nextFields[fieldId] = normalizedValue;
+      }
+      return nextFields;
+    },
+    [editableFieldIds]
+  );
+
+  const fetchAllRecordsForExport = useCallback(async () => {
+    const allRecords: MwsRecord[] = [];
+    let pageNum = 1;
+
+    while (true) {
+      const response = await api.getRecordsPage(dstId, 500, pageNum, viewId);
+      const chunk = (response?.data?.records || response?.records || []) as MwsRecord[];
+      allRecords.push(...chunk);
+      if (chunk.length < 500) break;
+      pageNum += 1;
+    }
+
+    return allRecords;
+  }, [dstId, viewId]);
+
+  const buildExportRows = useCallback(
+    (sourceRecords: MwsRecord[], includeId = true) => {
+      const exportFields = includeId
+        ? normalizedFields
+        : normalizedFields.filter((field) => field.name.trim().toLowerCase() !== 'id' && field.id.trim().toLowerCase() !== 'id');
+
+      return sourceRecords.map((record) =>
+        Object.fromEntries(
+          exportFields.map((field) => [
+            field.name,
+            displayFieldValue(field, (record.fields || {})[field.id]) || '',
+          ])
+        )
+      );
+    },
+    [displayFieldValue, normalizedFields]
+  );
+
+  const downloadBlob = useCallback((blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, []);
+
+  const exportTable = useCallback(
+    async (format: 'csv' | 'xlsx' | 'pdf') => {
+      if (exporting) return;
+      setExporting(format);
+      setError(null);
+      setNotice(null);
+
+      try {
+        const sourceRecords = await fetchAllRecordsForExport();
+        const safeTitle = (title || viewName || dstId).trim().replace(/[\\/:*?"<>|]+/g, '_');
+
+        if (format === 'csv' || format === 'xlsx') {
+          const XLSX = await import('xlsx');
+          const rows = buildExportRows(sourceRecords, true);
+          const worksheet = XLSX.utils.json_to_sheet(rows);
+          const workbook = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(workbook, worksheet, 'MWS Table');
+
+          if (format === 'csv') {
+            const csv = XLSX.utils.sheet_to_csv(worksheet);
+            downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${safeTitle}.csv`);
+          } else {
+            const arrayBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+            downloadBlob(
+              new Blob([arrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+              `${safeTitle}.xlsx`
+            );
+          }
+        } else {
+          const { jsPDF } = await import('jspdf');
+          const autoTableModule = await import('jspdf-autotable');
+          const autoTable = autoTableModule.default;
+          const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+          const pdfRows = buildExportRows(sourceRecords, false);
+          const headers = Object.keys(pdfRows[0] || {});
+          const body = pdfRows.map((row) => headers.map((header) => String(row[header] ?? '')));
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(16);
+          pdf.text(title || viewName || 'MWS Table', 40, 42);
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(10);
+          pdf.text(`Экспортировано ${new Date().toLocaleString('ru-RU')}`, 40, 60);
+          autoTable(pdf, {
+            startY: 80,
+            head: [headers],
+            body,
+            styles: { font: 'helvetica', fontSize: 8, cellPadding: 5, overflow: 'linebreak' },
+            headStyles: { fillColor: [17, 18, 35], textColor: [255, 255, 255] },
+            margin: { left: 32, right: 32 },
+          });
+          pdf.save(`${safeTitle}.pdf`);
+        }
+
+        setNotice(`Экспорт ${format.toUpperCase()} готов`);
+      } catch (exportError) {
+        setError(exportError instanceof Error ? exportError.message : 'Не удалось выгрузить таблицу');
+      } finally {
+        setExporting(null);
+      }
+    },
+    [buildExportRows, downloadBlob, dstId, exporting, fetchAllRecordsForExport, title, viewName]
+  );
+
+  const importTable = useCallback(
+    async (file: File) => {
+      if (importing) return;
+      setImporting(true);
+      setError(null);
+      setNotice(null);
+
+      try {
+        const XLSX = await import('xlsx');
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: 'array', raw: false });
+        const firstSheetName = workbook.SheetNames[0];
+        if (!firstSheetName) throw new Error('Файл не содержит листов');
+
+        const worksheet = workbook.Sheets[firstSheetName];
+        if (!worksheet) throw new Error('Не удалось открыть первый лист файла');
+        const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' });
+        if (rows.length === 0) throw new Error('В файле нет строк для импорта');
+
+        const fieldByLowerName = new Map(
+          normalizedFields
+            .filter((field) => field.editable)
+            .flatMap((field) => [
+              [field.name.trim().toLowerCase(), field],
+              [field.id.trim().toLowerCase(), field],
+            ])
+        );
+
+        const mappedRows = rows
+          .map((row) => {
+            const draft: Record<string, string> = {};
+            for (const [header, value] of Object.entries(row)) {
+              const field = fieldByLowerName.get(header.trim().toLowerCase());
+              if (!field) continue;
+              draft[field.id] = String(value ?? '').trim();
+            }
+            return buildRecordFieldsFromDraft(draft);
+          })
+          .filter((row) => Object.keys(row).length > 0);
+
+        if (mappedRows.length === 0) {
+          throw new Error('Не удалось сопоставить колонки файла с редактируемыми полями таблицы');
+        }
+
+        for (let index = 0; index < mappedRows.length; index += 200) {
+          await api.createRecords(dstId, {
+            records: mappedRows.slice(index, index + 200).map((fieldsRow) => ({ fields: fieldsRow })),
+          });
+        }
+
+        await load(page);
+        setNotice(`Импортировано строк: ${mappedRows.length}`);
+      } catch (importError) {
+        setError(importError instanceof Error ? importError.message : 'Не удалось импортировать файл');
+      } finally {
+        setImporting(false);
+        if (importInputRef.current) {
+          importInputRef.current.value = '';
+        }
+      }
+    },
+    [buildRecordFieldsFromDraft, dstId, importing, load, normalizedFields, page]
+  );
+
+  const openGanttCreateModal = useCallback(() => {
+    setGanttDraft({
+      title: '',
+      startDate: ganttCenterDate,
+      endDate: addDays(ganttCenterDate, 2),
+      status: 'To Do',
+    });
+    setGanttDraftError('');
+    setShowGanttCreateModal(true);
+  }, [ganttCenterDate]);
+
+  const submitGanttDraft = useCallback(async () => {
+    if (!primaryEditableFieldId && !primaryFieldId) return;
+
+    const nextRecordFields: Record<string, string> = {};
+    const titleFieldId = primaryEditableFieldId || primaryFieldId;
+    if (titleFieldId && editableFieldIds.has(titleFieldId)) nextRecordFields[titleFieldId] = ganttDraft.title.trim();
+    if (startDateFieldId && editableFieldIds.has(startDateFieldId)) nextRecordFields[startDateFieldId] = ganttDraft.startDate;
+    if (endDateFieldId && editableFieldIds.has(endDateFieldId)) nextRecordFields[endDateFieldId] = ganttDraft.endDate;
+    if (statusFieldId && editableFieldIds.has(statusFieldId)) nextRecordFields[statusFieldId] = ganttDraft.status;
+
+    if (!nextRecordFields[titleFieldId]) {
+      setGanttDraftError('Введите название этапа');
+      return;
+    }
+
+    try {
+      await api.createRecords(dstId, {
+        records: [{ fields: nextRecordFields }],
+      });
+      await load(page);
+      setShowGanttCreateModal(false);
+      setNotice('Этап добавлен');
+    } catch (createError) {
+      setGanttDraftError(createError instanceof Error ? createError.message : 'Не удалось создать этап');
+    }
+  }, [dstId, editableFieldIds, endDateFieldId, ganttDraft, load, page, primaryEditableFieldId, primaryFieldId, startDateFieldId, statusFieldId]);
+
   const calendarEntries = useMemo(
     () =>
       filteredRecords
@@ -1245,7 +1836,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
           if (!recordId || !date) return null;
           return {
             id: recordId,
-            title: mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`,
+            title: displayCellValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`,
             date,
           };
         })
@@ -1305,8 +1896,8 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
       {filteredRecords.map((record) => {
         const recordId = record.recordId || record.id || '';
-        const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`;
-        const imageValue = imageFieldId ? mwsCellDisplayValue((record.fields || {})[imageFieldId]) : '';
+        const titleValue = displayCellValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`;
+        const imageValue = imageFieldId ? displayCellValue((record.fields || {})[imageFieldId]) : '';
         const previewFields = normalizedFields.slice(0, 3);
         return (
           <article key={recordId} style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg)' }}>
@@ -1317,7 +1908,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
               <div style={{ fontWeight: 700, marginBottom: 8 }}>{titleValue}</div>
               {previewFields.map((field) => (
                 <div key={`${recordId}:${field.id}`} style={{ fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
-                      {field.name}: {formatFieldDisplayValue(field, (record.fields || {})[field.id]) || '—'}
+                      {field.name}: {displayFieldValue(field, (record.fields || {})[field.id]) || '—'}
                 </div>
               ))}
             </div>
@@ -1331,7 +1922,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
       {filteredRecords.map((record) => {
         const recordId = record.recordId || record.id || '';
-        const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`;
+        const titleValue = displayCellValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`;
         return (
           <article key={recordId} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--bg)' }}>
             <div style={{ fontWeight: 700, marginBottom: 10 }}>{titleValue}</div>
@@ -1341,7 +1932,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                   <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 4 }}>
                     {field.name}
                   </div>
-                  <div style={{ fontSize: 13 }}>{formatFieldDisplayValue(field, (record.fields || {})[field.id]) || '—'}</div>
+                  <div style={{ fontSize: 13 }}>{displayFieldValue(field, (record.fields || {})[field.id]) || '—'}</div>
                 </div>
               ))}
             </div>
@@ -1358,7 +1949,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
 
     const grouped = new Map<string, MwsRecord[]>(kanbanColumns.map((column) => [column, []]));
     for (const record of filteredRecords) {
-      const key = mwsCellDisplayValue((record.fields || {})[statusFieldId]).trim() || 'No status';
+      const key = displayCellValue((record.fields || {})[statusFieldId]).trim() || 'No status';
       grouped.set(key, [...(grouped.get(key) || []), record]);
     }
 
@@ -1419,12 +2010,12 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                 <div className="table-embed-kanban-col-body">
                   {items.length > 0 ? items.map((record) => {
                     const recordId = record.recordId || record.id || '';
-                    const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Record ${recordId}`;
+                    const titleValue = displayCellValue((record.fields || {})[primaryFieldId]) || `Record ${recordId}`;
                     const previewFields = normalizedFields
                       .filter((field) => field.id !== primaryFieldId && field.id !== statusFieldId)
                       .slice(0, 1);
                     const isDragging = draggedKanbanRecordId === recordId;
-                    const cardLabel = previewFields[0] ? formatFieldDisplayValue(previewFields[0], (record.fields || {})[previewFields[0].id]) : title || 'TEXT';
+                    const cardLabel = previewFields[0] ? displayFieldValue(previewFields[0], (record.fields || {})[previewFields[0].id]) : title || 'TEXT';
 
                     return (
                       <article
@@ -1472,9 +2063,9 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
     if (!activeKanbanRecord || !activeKanbanRecordId) return null;
 
     const recordFields = activeKanbanRecord.fields || {};
-    const titleValue = mwsCellDisplayValue(recordFields[primaryFieldId]) || `Record ${activeKanbanRecordId}`;
+    const titleValue = displayCellValue(recordFields[primaryFieldId]) || `Record ${activeKanbanRecordId}`;
     const canDeleteTask = !deletingRows.has(activeKanbanRecordId);
-    const currentStatus = kanbanTaskDraft[statusFieldId] || mwsCellDisplayValue(recordFields[statusFieldId]).trim() || 'No status';
+    const currentStatus = kanbanTaskDraft[statusFieldId] || displayCellValue(recordFields[statusFieldId]).trim() || 'No status';
     const currentStatusStyle = getKanbanOptionStyle(currentStatus);
 
     const saveKanbanTask = async () => {
@@ -1488,7 +2079,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
           const nextValue = (kanbanTaskDraft[field.id] || '').trim();
           const currentValue = ((field.typeHint || '').includes('date')
             ? parseDateValue(recordFields[field.id]) || ''
-            : formatFieldDisplayValue(field, recordFields[field.id])).trim();
+            : displayFieldValue(field, recordFields[field.id])).trim();
 
           if (nextValue === currentValue) continue;
           await updateCell(
@@ -1688,88 +2279,144 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
   };
 
   const renderArchitectureView = () => (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14 }}>
-      {filteredRecords.map((record, index) => {
-        const recordId = record.recordId || record.id || '';
-        const titleValue = mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Узел ${index + 1}`;
-        return (
-          <article key={recordId} style={{ border: '1px solid var(--border)', borderRadius: 14, padding: 14, background: 'var(--bg)' }}>
-            <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 8 }}>Узел</div>
-            <div style={{ fontWeight: 700, marginBottom: 10 }}>{titleValue}</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {normalizedFields.slice(0, 4).map((field) => (
-                <span key={`${recordId}:${field.id}`} style={{ fontSize: 11, padding: '4px 8px', borderRadius: 999, background: 'var(--surface)' }}>
-                  {field.name}: {formatFieldDisplayValue(field, (record.fields || {})[field.id]) || '—'}
-                </span>
-              ))}
-            </div>
-          </article>
-        );
-      })}
+    <div className="page-grid-view table-embed-architecture-view">
+      <div className="page-grid-view-head">
+        <span className="page-grid-view-title">Архитектура</span>
+        <span className="page-grid-view-note">Сводка по структуре таблицы без редактирования</span>
+      </div>
+      <div className="architecture-layout architecture-layout--compact">
+        <section className="architecture-card">
+          <h4>Распределение типов полей</h4>
+          <div className="architecture-badges">
+            {architectureTypeCounts.length > 0 ? architectureTypeCounts.map(([type, count]) => (
+              <span key={type} className="architecture-badge">
+                {type} <strong>{count}</strong>
+              </span>
+            )) : (
+              <span className="architecture-badge">нет данных</span>
+            )}
+          </div>
+        </section>
+        <section className="architecture-card">
+          <h4>Связи</h4>
+          <p>Связанных полей: <strong>{linkedFieldCount}</strong></p>
+          <p>Разрешённых ссылок: <strong>{resolvedLinkedRecordsCount}</strong></p>
+          <p>Всего найдено записей: <strong>{filteredRecords.length}</strong></p>
+        </section>
+      </div>
     </div>
   );
 
   const renderGanttView = () => {
-    const ganttRecords = filteredRecords
-      .map((record) => {
-        const recordId = record.recordId || record.id || '';
-        const startDate = startDateFieldId ? parseDateValue((record.fields || {})[startDateFieldId]) : null;
-        const fallbackDate = dateFieldId ? parseDateValue((record.fields || {})[dateFieldId]) : null;
-        const resolvedStartDate = startDate || fallbackDate;
-        const resolvedEndDate = endDateFieldId
-          ? parseDateValue((record.fields || {})[endDateFieldId]) || resolvedStartDate
-          : resolvedStartDate;
-        if (!recordId || !resolvedStartDate) return null;
-        return {
-          id: recordId,
-          title: mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`,
-          startDate: resolvedStartDate,
-          endDate: resolvedEndDate || resolvedStartDate,
-        };
-      })
-      .filter((item): item is { id: string; title: string; startDate: string; endDate: string } => Boolean(item));
-
     if (ganttRecords.length === 0) {
       return <div className="table-embed-empty">Для диаграммы Ганта не найдено полей с датами.</div>;
     }
 
-    const timelineMonth = getMonthKey(ganttRecords[0]?.startDate);
-    const timelineDays = getDaysInMonth(timelineMonth);
-
     return (
-      <div>
-        <div style={{ display: 'grid', gridTemplateColumns: `220px repeat(${timelineDays}, minmax(18px, 1fr))`, gap: 6, marginBottom: 10, fontSize: 11, color: 'var(--text-muted)' }}>
-          <span>Этап</span>
-          {Array.from({ length: timelineDays }, (_, index) => (
-            <span key={index} style={{ textAlign: 'center' }}>{index + 1}</span>
-          ))}
+      <div className="page-grid-view table-embed-gantt-view">
+        <div className="page-view-toolbar page-gantt-toolbar table-embed-gantt-toolbar">
+          <div className="page-gantt-nav">
+            <button type="button" className="btn btn-ghost" onClick={() => setGanttCenterDate((prev) => addDays(prev, -TABLE_GANTT_NAV_STEP))}>
+              ←
+            </button>
+            <strong>{formatMonthLabel(monthKeyFromDate(ganttCenterDate))}</strong>
+            <button type="button" className="btn btn-ghost" onClick={() => setGanttCenterDate((prev) => addDays(prev, TABLE_GANTT_NAV_STEP))}>
+              →
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => setGanttCenterDate(formatIsoDate(new Date()))}>
+              Сегодня
+            </button>
+          </div>
+          <div className="table-embed-gantt-toolbar-actions">
+            <span className="page-gantt-range-label">
+              {formatShortDate(timelineDays[0] || '')} - {formatShortDate(timelineDays[timelineDays.length - 1] || '')}
+            </span>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={openGanttCreateModal}
+              disabled={!primaryEditableFieldId && !primaryFieldId}
+            >
+              Новый этап
+            </button>
+          </div>
         </div>
-        <div style={{ display: 'grid', gap: 10 }}>
-          {ganttRecords.map((item) => {
-            const startDay = Math.max(1, Number(item.startDate.slice(-2)));
-            const endDay = Math.max(startDay, Number(item.endDate.slice(-2)));
-            const leftColumn = Math.min(timelineDays, startDay);
-            const span = Math.max(1, endDay - startDay + 1);
+        <div className="page-gantt-surface">
+          <div className="page-gantt-header-row" style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}>
+            <div className="page-gantt-header-spacer">
+              <div className={`page-gantt-header-spacer-content${isGanttSidebarCollapsed ? ' is-collapsed' : ''}`}>
+                <button
+                  type="button"
+                  className="page-gantt-pane-toggle"
+                  onClick={() => setIsGanttSidebarCollapsed((prev) => !prev)}
+                  aria-label={isGanttSidebarCollapsed ? 'Развернуть список задач' : 'Свернуть список задач'}
+                >
+                  {isGanttSidebarCollapsed ? '→' : '←'}
+                </button>
+                {!isGanttSidebarCollapsed && (
+                  <div className="page-gantt-header-caption">
+                    <strong>Задачи</strong>
+                    <span>Левая колонка закреплена, а шкала двигается стрелками по бесконечной ленте дат.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="page-gantt-header-timeline">
+              <div className="page-gantt-months" style={{ gridTemplateColumns: timelineGrid }}>
+                {monthSegments.map((segment) => (
+                  <div key={segment.key} className="page-gantt-month-segment" style={{ gridColumn: `span ${segment.span}` }}>
+                    {segment.label}
+                  </div>
+                ))}
+              </div>
+              <div className="page-gantt-scale" style={{ gridTemplateColumns: timelineGrid }}>
+                {timelineDays.map((day) => {
+                  const isToday = day === formatIsoDate(new Date());
+                  return (
+                    <span key={day} className={isToday ? 'is-today' : undefined}>
+                      <strong>{day.slice(-2)}</strong>
+                      <small>{formatWeekdayShort(day)}</small>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <div className="page-gantt">
+            {ganttRecords.map((item) => {
+              const startOffset = diffDays(timelineStart, item.startDate);
+              const duration = Math.max(1, diffDays(item.startDate, item.endDate) + 1);
+              const left = `${(startOffset / timelineDays.length) * 100}%`;
+              const widthPercent = `${(duration / timelineDays.length) * 100}%`;
+              const minBarWidth = Math.round(sidebarWidth * 0.72);
+              const barStyle = {
+                left,
+                width: `max(${widthPercent}, ${minBarWidth}px)`,
+                maxWidth: `calc(100% - ${left})`,
+                '--gantt-bar-color': item.color || '#111111',
+              } as CSSProperties;
 
-            return (
-              <div key={item.id} style={{ display: 'grid', gridTemplateColumns: `220px repeat(${timelineDays}, minmax(18px, 1fr))`, gap: 6, alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontWeight: 700 }}>{item.title}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    {formatShortDate(item.startDate)} - {formatShortDate(item.endDate)}
+              return (
+                <div key={item.id} className="page-gantt-row" style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}>
+                  {isGanttSidebarCollapsed ? (
+                    <div className="page-gantt-collapsed-slot" />
+                  ) : (
+                    <div className="page-gantt-label">
+                      <span className="page-gantt-label-title">{item.title}</span>
+                      <span className="page-gantt-label-meta">
+                        {formatShortDate(item.startDate)} - {formatShortDate(item.endDate)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="page-gantt-track" style={{ backgroundSize: timelineBackgroundSize }}>
+                    <div className="page-gantt-bar" style={barStyle}>
+                      <span className="page-gantt-bar-label">{item.title}</span>
+                    </div>
                   </div>
                 </div>
-                <div
-                  style={{
-                    gridColumn: `${leftColumn + 1} / span ${span}`,
-                    background: 'linear-gradient(90deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, white) 100%)',
-                    borderRadius: 999,
-                    height: 14,
-                  }}
-                />
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
     );
@@ -1782,7 +2429,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         return (
           <article key={recordId} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--bg)' }}>
             <div style={{ fontWeight: 700, marginBottom: 12 }}>
-              {mwsCellDisplayValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`}
+              {displayCellValue((record.fields || {})[primaryFieldId]) || `Запись ${recordId}`}
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
               {normalizedFields.map((field) => (
@@ -1791,12 +2438,12 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                   {field.editable ? (
                     <input
                       className="table-embed-cell-input"
-                      defaultValue={formatFieldDisplayValue(field, (record.fields || {})[field.id])}
+                      defaultValue={displayFieldValue(field, (record.fields || {})[field.id])}
                       onBlur={(e) => updateCell(recordId, field.id, e.target.value)}
                     />
                   ) : (
                     <div className="table-embed-cell-readonly" style={{ padding: '10px 12px', borderRadius: 8, background: 'var(--surface)' }}>
-                      {formatFieldDisplayValue(field, (record.fields || {})[field.id]) || '—'}
+                      {displayFieldValue(field, (record.fields || {})[field.id]) || '—'}
                     </div>
                   )}
                 </label>
@@ -1826,6 +2473,16 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
         setTableDropTargetRecordId(null);
       }}
     >
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".csv,.xlsx"
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void importTable(file);
+        }}
+      />
       {viewMode !== 'kanban' && (
       <div className="table-embed-header">
         <div className="table-embed-title-group">
@@ -1846,6 +2503,38 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
           />
           <button
             className="table-embed-btn"
+            onClick={() => importInputRef.current?.click()}
+            title="Импорт CSV/XLSX"
+            disabled={importing}
+          >
+            {importing ? 'Импорт...' : 'Импорт'}
+          </button>
+          <button
+            className="table-embed-btn"
+            onClick={() => void exportTable('csv')}
+            title="Экспорт CSV"
+            disabled={Boolean(exporting)}
+          >
+            {exporting === 'csv' ? 'CSV...' : 'CSV'}
+          </button>
+          <button
+            className="table-embed-btn"
+            onClick={() => void exportTable('xlsx')}
+            title="Экспорт XLSX"
+            disabled={Boolean(exporting)}
+          >
+            {exporting === 'xlsx' ? 'XLSX...' : 'XLSX'}
+          </button>
+          <button
+            className="table-embed-btn"
+            onClick={() => void exportTable('pdf')}
+            title="Экспорт PDF"
+            disabled={Boolean(exporting)}
+          >
+            {exporting === 'pdf' ? 'PDF...' : 'PDF'}
+          </button>
+          <button
+            className="table-embed-btn"
             onClick={() => load(page)}
             title="Обновить"
             disabled={loading}
@@ -1862,6 +2551,10 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
           )}
         </div>
       </div>
+      )}
+
+      {notice && viewMode !== 'kanban' && (
+        <div className="table-embed-notice">{notice}</div>
       )}
 
       {error && viewMode !== 'kanban' && (
@@ -2026,9 +2719,9 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                       <td key={cellKey} className={isSaving ? 'table-embed-cell--saving' : ''}>
                         {field.editable ? (
                           <input
-                            key={`${cellKey}:${formatFieldDisplayValue(field, rowFields[field.id])}`}
+                            key={`${cellKey}:${displayFieldValue(field, rowFields[field.id])}`}
                             className="table-embed-cell-input"
-                            defaultValue={formatFieldDisplayValue(field, rowFields[field.id])}
+                            defaultValue={displayFieldValue(field, rowFields[field.id])}
                             onBlur={(e) => updateCell(recordId, field.id, e.target.value)}
                             disabled={isDeleting}
                           />
@@ -2037,7 +2730,7 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
                             className="table-embed-cell-readonly"
                             title={field.typeHint ? `Поле ${field.typeHint}` : 'Поле только для просмотра'}
                           >
-                            {formatFieldDisplayValue(field, rowFields[field.id]) || '—'}
+                            {displayFieldValue(field, rowFields[field.id]) || '—'}
                           </span>
                         )}
                       </td>
@@ -2076,6 +2769,67 @@ export default function TableEmbed({ dstId, title, viewId, viewName, viewType, o
       {viewMode === 'gantt' && renderGanttView()}
       {viewMode === 'form' && renderFormView()}
       {viewMode === 'kanban' && renderKanbanTaskModal()}
+      {showGanttCreateModal && (
+        <div className="modal-overlay" onClick={() => setShowGanttCreateModal(false)}>
+          <div className="modal page-gantt-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>Новый этап</h3>
+            <p className="modal-note">Создание записи для диаграммы Ганта вынесено в отдельное окно.</p>
+            <div className="page-gantt-modal-fields">
+              <label className="page-view-field">
+                <span>Название</span>
+                <input
+                  className="page-form-input"
+                  placeholder="Например, дизайн этапа"
+                  value={ganttDraft.title}
+                  onChange={(event) => {
+                    setGanttDraft((prev) => ({ ...prev, title: event.target.value }));
+                    if (ganttDraftError) setGanttDraftError('');
+                  }}
+                />
+              </label>
+              <label className="page-view-field">
+                <span>Статус</span>
+                <input
+                  className="page-form-input"
+                  value={ganttDraft.status}
+                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, status: event.target.value }))}
+                />
+              </label>
+              <label className="page-view-field">
+                <span>Дата начала</span>
+                <input
+                  className="page-form-input"
+                  type="date"
+                  value={ganttDraft.startDate}
+                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, startDate: event.target.value }))}
+                />
+              </label>
+              <label className="page-view-field">
+                <span>Дата окончания</span>
+                <input
+                  className="page-form-input"
+                  type="date"
+                  value={ganttDraft.endDate}
+                  onChange={(event) => setGanttDraft((prev) => ({ ...prev, endDate: event.target.value }))}
+                />
+              </label>
+            </div>
+            {ganttDraftError && <div className="auth-error">{ganttDraftError}</div>}
+            <div className="modal-actions">
+              <button className="modal-close" onClick={() => setShowGanttCreateModal(false)}>
+                Отмена
+              </button>
+              <button
+                className="modal-close"
+                onClick={() => void submitGanttDraft()}
+                disabled={!ganttDraft.title.trim() || !ganttDraft.startDate || !ganttDraft.endDate}
+              >
+                Создать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {viewMode !== 'kanban' && <div className="table-embed-footer">
         <span className="table-embed-count">

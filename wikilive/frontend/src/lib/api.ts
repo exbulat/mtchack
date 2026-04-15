@@ -220,6 +220,11 @@ export const api = {
       `/tables/datasheets/${dstId}/records?pageSize=${pageSize}&fieldKey=id${viewId ? `&viewId=${encodeURIComponent(viewId)}` : ''}`
     ),
 
+  getRecordsPage: (dstId: string, pageSize = 100, pageNum = 1, viewId?: string | null) =>
+    request<MwsRecordsResponse>(
+      `/tables/datasheets/${dstId}/records?pageSize=${pageSize}&pageNum=${pageNum}&fieldKey=id${viewId ? `&viewId=${encodeURIComponent(viewId)}` : ''}`
+    ),
+
   createRecords: (dstId: string, body: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/tables/datasheets/${dstId}/records`, {
       method: 'POST',
